@@ -21,9 +21,10 @@
 #include "app_audio.h"
 #include "app_wifi.h"
 #include "settings.h"
+#include "state.h"
+#include "wake_word.h"
 
 #define SCROLL_START_DELAY_S            (1.5)
-#define LISTEN_SPEAK_PANEL_DELAY_MS     2000
 #define SERVER_ERROR                    "server_error"
 #define INVALID_REQUEST_ERROR           "invalid_request_error"
 #define SORRY_CANNOT_UNDERSTAND         "Sorry, I can't understand."
@@ -47,13 +48,13 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
     transcript[0] = '\0';
     reply[0] = '\0';
 
-    ui_ctrl_show_panel(UI_CTRL_PANEL_GET, 0);
+    sat_state_set(SAT_STATE_UPLOADING);
 
     ret = havencore_stt(sys_param->url, audio, audio_len,
                        transcript, sizeof(transcript));
     if (ret != ESP_OK || transcript[0] == '\0') {
         ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
+        sat_state_set(SAT_STATE_ERROR);
         if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
         ESP_GOTO_ON_ERROR(ret, err, TAG, "[stt]: no text");
     }
@@ -61,21 +62,23 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
     ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, transcript);
     ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, transcript);
 
+    sat_state_set(SAT_STATE_THINKING);
+
     ret = havencore_chat(sys_param->url, transcript, reply, sizeof(reply));
     if (ret != ESP_OK || reply[0] == '\0') {
         ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
+        sat_state_set(SAT_STATE_ERROR);
         if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
         ESP_GOTO_ON_ERROR(ret, err, TAG, "[chat]: no reply");
     }
 
     ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, reply);
-    ui_ctrl_show_panel(UI_CTRL_PANEL_REPLY, 0);
+    sat_state_set(SAT_STATE_SPEAKING);
 
     ret = havencore_tts(sys_param->url, "af_heart", reply,
                        &tts_wav, &tts_wav_len);
     if (ret != ESP_OK || tts_wav == NULL || tts_wav_len == 0) {
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 5 * LISTEN_SPEAK_PANEL_DELAY_MS);
+        sat_state_set(SAT_STATE_ERROR);
         fp = fopen("/spiffs/tts_failed.mp3", "r");
         if (fp) {
             audio_player_play(fp);
@@ -93,7 +96,7 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
 
     if (status != ESP_OK) {
         ESP_LOGE(TAG, "audio_player_play failed: %s", esp_err_to_name(status));
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 0);
+        sat_state_set(SAT_STATE_IDLE);
     } else {
         vTaskDelay(pdMS_TO_TICKS(SCROLL_START_DELAY_S * 1000));
         ui_ctrl_reply_set_audio_start_flag(true);
@@ -145,6 +148,8 @@ void app_main()
     ESP_LOGI(TAG, "Display LVGL demo");
     bsp_display_backlight_on();
     ui_ctrl_init();
+    sat_state_init();
+    wake_word_set_enabled(false);
     app_network_start();
 
     ESP_LOGI(TAG, "speech recognition start");

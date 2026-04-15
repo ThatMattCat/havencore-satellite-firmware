@@ -25,6 +25,7 @@
 #include "file_iterator.h"
 #include "app_ui_ctrl.h"
 #include "app_wifi.h"
+#include "state.h"
 
 static const char *TAG = "app_audio";
 
@@ -325,9 +326,8 @@ void sr_handler_task(void *pvParam)
         if (WAKENET_DETECTED == result.wakenet_mode) {
             audio_record_start();
 
-            // UI show listen
             ui_ctrl_guide_jump();
-            ui_ctrl_show_panel(UI_CTRL_PANEL_LISTEN, 0);
+            sat_state_set(SAT_STATE_LISTENING);
 
             audio_play_task("/spiffs/echo_en_wake.wav");
             continue;

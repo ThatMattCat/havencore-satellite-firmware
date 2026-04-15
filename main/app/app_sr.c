@@ -28,6 +28,7 @@
 #include "bsp_board.h"
 #include "app_audio.h"
 #include "app_wifi.h"
+#include "wake_word.h"
 
 static const char *TAG = "app_sr";
 
@@ -101,7 +102,7 @@ static void audio_detect_task(void *arg)
         if (!res || res->ret_value == ESP_FAIL) {
             continue;
         }
-        if (res->wakeup_state == WAKENET_DETECTED) {
+        if (res->wakeup_state == WAKENET_DETECTED && wake_word_enabled()) {
             ESP_LOGI(TAG,  "wakeword detected");
             sr_result_t result = {
                 .wakenet_mode = WAKENET_DETECTED,
