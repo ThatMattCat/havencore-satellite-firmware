@@ -23,6 +23,7 @@
 #include "settings.h"
 #include "state.h"
 #include "wake_word.h"
+#include "debug_overlay.h"
 
 #define SCROLL_START_DELAY_S            (1.5)
 #define SERVER_ERROR                    "server_error"
@@ -68,6 +69,7 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
                        transcript, sizeof(transcript));
     if (ret != ESP_OK || transcript[0] == '\0') {
         ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
+        debug_overlay_set_last_error("stt: empty/failed");
         sat_state_set(SAT_STATE_ERROR);
         if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
         ESP_GOTO_ON_ERROR(ret, err, TAG, "[stt]: no text");
@@ -81,6 +83,7 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
     ret = havencore_chat(sys_param->url, transcript, reply, sizeof(reply));
     if (ret != ESP_OK || reply[0] == '\0') {
         ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
+        debug_overlay_set_last_error("chat: empty/failed");
         sat_state_set(SAT_STATE_ERROR);
         if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
         ESP_GOTO_ON_ERROR(ret, err, TAG, "[chat]: no reply");
@@ -92,6 +95,7 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
     ret = havencore_tts(sys_param->url, sys_param->voice, reply,
                        &tts_wav, &tts_wav_len);
     if (ret != ESP_OK || tts_wav == NULL || tts_wav_len == 0) {
+        debug_overlay_set_last_error("tts: empty/failed");
         sat_state_set(SAT_STATE_ERROR);
         fp = fopen("/spiffs/tts_failed.mp3", "r");
         if (fp) {
@@ -162,6 +166,7 @@ void app_main()
     ESP_LOGI(TAG, "Display LVGL demo");
     bsp_display_backlight_on();
     ui_ctrl_init();
+    debug_overlay_init();
     sat_state_init();
     wake_word_set_enabled(sys_param->wake_enabled != 0);
     app_network_start();
