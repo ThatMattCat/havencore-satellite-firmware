@@ -6,18 +6,16 @@
 
 #pragma once
 
-#include "OpenAI.h"
+#include "esp_err.h"
 
 #define SSID_SIZE 32
 #define PASSWORD_SIZE 64
-#define KEY_SIZE 165
 #define URL_SIZE 64
 
 typedef struct {
     char ssid[SSID_SIZE];             /* SSID of target AP. */
     char password[PASSWORD_SIZE];     /* Password of target AP. */
-    char key[KEY_SIZE];               /* OpenAI key. */
-    char url[URL_SIZE];               /* OpenAI Base url. */
+    char url[URL_SIZE];               /* HavenCore agent base URL. */
 } sys_param_t;
 
 esp_err_t settings_factory_reset(void);

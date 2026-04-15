@@ -39,7 +39,7 @@ uint8_t *audio_rx_buffer = NULL;
 audio_play_finish_cb_t audio_play_finish_cb = NULL;
 
 extern sr_data_t *g_sr_data;
-extern esp_err_t start_openai(uint8_t *audio, int audio_len);
+extern esp_err_t start_havencore_turn(uint8_t *audio, int audio_len);
 extern int Cache_WriteBack_Addr(uint32_t addr, uint32_t size);
 
 /* main function */
@@ -317,7 +317,7 @@ void sr_handler_task(void *pvParam)
                 audio_player_play(fp);
             }
             if (WIFI_STATUS_CONNECTED_OK == wifi_connected_already()) {
-                start_openai((uint8_t *)record_audio_buffer, record_total_len);
+                start_havencore_turn((uint8_t *)record_audio_buffer, record_total_len);
             }
             continue;
         }
@@ -337,7 +337,7 @@ void sr_handler_task(void *pvParam)
             ESP_LOGI(TAG, "STOP:%d", result.command_id);
             audio_record_stop();
             audio_play_task("/spiffs/echo_en_ok.wav");
-            //How to stop the transmission, when start_openai begins.
+            //How to stop the transmission, when start_havencore_turn begins.
             continue;
         }
     }

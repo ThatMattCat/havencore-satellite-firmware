@@ -13,7 +13,7 @@
 #include "esp_check.h"
 #include "nvs_flash.h"
 #include "app_ui_ctrl.h"
-#include "OpenAI.h"
+#include "havencore_client.h"
 #include "audio_player.h"
 #include "app_sr.h"
 #include "bsp/esp-bsp.h"
@@ -32,149 +32,76 @@
 static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
 
-/* program flow. This function is called in app_audio.c */
-esp_err_t start_openai(uint8_t *audio, int audio_len)
+/* One full turn: STT -> chat -> TTS -> playback. Called from app_audio.c
+ * once an utterance has been captured into `audio` (WAV, 16kHz/16-bit mono).
+ * Base URL for HavenCore comes from NVS (sys_param->url). */
+esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
 {
     esp_err_t ret = ESP_OK;
-    static OpenAI_t *openai = NULL;
-    static OpenAI_AudioTranscription_t *audioTranscription = NULL;
-    static OpenAI_ChatCompletion_t *chatCompletion = NULL;
-    static OpenAI_AudioSpeech_t *audioSpeech = NULL;
-
-    OpenAI_SpeechResponse_t *speechresult = NULL;
-    OpenAI_StringResponse_t *result = NULL;
+    uint8_t *tts_wav = NULL;
+    size_t tts_wav_len = 0;
     FILE *fp = NULL;
 
-    if (openai == NULL) {
-        openai = OpenAICreate(sys_param->key);
-        ESP_RETURN_ON_FALSE(NULL != openai, ESP_ERR_INVALID_ARG, TAG, "OpenAICreate faield");
-
-        OpenAIChangeBaseURL(openai, sys_param->url);
-
-        audioTranscription = openai->audioTranscriptionCreate(openai);
-        chatCompletion = openai->chatCreate(openai);
-        audioSpeech = openai->audioSpeechCreate(openai);
-
-        audioTranscription->setResponseFormat(audioTranscription, OPENAI_AUDIO_RESPONSE_FORMAT_JSON);
-        audioTranscription->setLanguage(audioTranscription, "en");
-        audioTranscription->setTemperature(audioTranscription, 0.2);
-
-        chatCompletion->setModel(chatCompletion, "gpt-3.5-turbo");
-        chatCompletion->setSystem(chatCompletion, "user");
-        chatCompletion->setMaxTokens(chatCompletion, CONFIG_MAX_TOKEN);
-        chatCompletion->setTemperature(chatCompletion, 0.2);
-        chatCompletion->setStop(chatCompletion, "\r");
-        chatCompletion->setPresencePenalty(chatCompletion, 0);
-        chatCompletion->setFrequencyPenalty(chatCompletion, 0);
-        chatCompletion->setUser(chatCompletion, "OpenAI-ESP32");
-
-        audioSpeech->setModel(audioSpeech, "tts-1");
-        audioSpeech->setVoice(audioSpeech, "nova");
-        audioSpeech->setResponseFormat(audioSpeech, OPENAI_AUDIO_OUTPUT_FORMAT_MP3);
-        audioSpeech->setSpeed(audioSpeech, 1.0);
-    }
+    static char transcript[512];
+    static char reply[2048];
+    transcript[0] = '\0';
+    reply[0] = '\0';
 
     ui_ctrl_show_panel(UI_CTRL_PANEL_GET, 0);
 
-    // OpenAI Audio Transcription
-    char *text = audioTranscription->file(audioTranscription, (uint8_t *)audio, audio_len, OPENAI_AUDIO_INPUT_FORMAT_WAV);
-
-    if (NULL == text) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, INVALID_REQUEST_ERROR);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioTranscription]: invalid url");
-    }
-
-    if (strstr(text, "\"code\": ")) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, text);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioTranscription]: invalid response");
-    }
-
-    if (strcmp(text, INVALID_REQUEST_ERROR) == 0 || strcmp(text, SERVER_ERROR) == 0) {
-        ret = ESP_ERR_INVALID_RESPONSE;
+    ret = havencore_stt(sys_param->url, audio, audio_len,
+                       transcript, sizeof(transcript));
+    if (ret != ESP_OK || transcript[0] == '\0') {
         ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
         ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioTranscription]: invalid response");
+        if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
+        ESP_GOTO_ON_ERROR(ret, err, TAG, "[stt]: no text");
     }
 
-    // UI listen success
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, text);
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, text);
+    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, transcript);
+    ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, transcript);
 
-    // OpenAI Chat Completion
-    result = chatCompletion->message(chatCompletion, text, false);
-    if (NULL == result) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chatCompletion]: invalid response");
-    }
-
-    char *response = result->getData(result, 0);
-
-    if (response != NULL && (strcmp(response, INVALID_REQUEST_ERROR) == 0 || strcmp(response, SERVER_ERROR) == 0)) {
-        // UI listen fail
-        ret = ESP_ERR_INVALID_RESPONSE;
+    ret = havencore_chat(sys_param->url, transcript, reply, sizeof(reply));
+    if (ret != ESP_OK || reply[0] == '\0') {
         ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
         ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chatCompletion]: invalid response");
+        if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
+        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chat]: no reply");
     }
 
-    // UI listen success
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_QUESTION, text);
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, response);
-
-    if (strcmp(response, INVALID_REQUEST_ERROR) == 0) {
-        ret = ESP_ERR_INVALID_RESPONSE;
-        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, SORRY_CANNOT_UNDERSTAND);
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, LISTEN_SPEAK_PANEL_DELAY_MS);
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[chatCompletion]: invalid response");
-    }
-
-    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, response);
+    ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, reply);
     ui_ctrl_show_panel(UI_CTRL_PANEL_REPLY, 0);
 
-    // OpenAI Speech Response
-    speechresult = audioSpeech->speech(audioSpeech, response);
-    if (NULL == speechresult) {
-        ret = ESP_ERR_INVALID_RESPONSE;
+    ret = havencore_tts(sys_param->url, "af_heart", reply,
+                       &tts_wav, &tts_wav_len);
+    if (ret != ESP_OK || tts_wav == NULL || tts_wav_len == 0) {
         ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 5 * LISTEN_SPEAK_PANEL_DELAY_MS);
         fp = fopen("/spiffs/tts_failed.mp3", "r");
         if (fp) {
             audio_player_play(fp);
+            fp = NULL;
         }
-        ESP_GOTO_ON_ERROR(ret, err, TAG, "[audioSpeech]: invalid response");
+        if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
+        ESP_GOTO_ON_ERROR(ret, err, TAG, "[tts]: no audio");
     }
 
-    uint32_t dataLength = speechresult->getLen(speechresult);
-    char *speechptr = speechresult->getData(speechresult);
     esp_err_t status = ESP_FAIL;
-    fp = fmemopen((void *)speechptr, dataLength, "rb");
+    fp = fmemopen((void *)tts_wav, tts_wav_len, "rb");
     if (fp) {
         status = audio_player_play(fp);
     }
 
     if (status != ESP_OK) {
-        ESP_LOGE(TAG, "Error creating ChatGPT request: %s\n", esp_err_to_name(status));
-        // UI reply audio fail
+        ESP_LOGE(TAG, "audio_player_play failed: %s", esp_err_to_name(status));
         ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 0);
     } else {
-        // Wait a moment before starting to scroll the reply content
         vTaskDelay(pdMS_TO_TICKS(SCROLL_START_DELAY_S * 1000));
         ui_ctrl_reply_set_audio_start_flag(true);
     }
 
 err:
-    // Clearing resources
-    if (speechresult) {
-        speechresult->deleteResponse (speechresult);
-    }
-
-    if (result) {
-        result->deleteResponse (result);
-    }
-
-    if (text) {
-        free(text);
+    if (tts_wav) {
+        free(tts_wav);
     }
     return ret;
 }
