@@ -49,6 +49,13 @@ esp_err_t havencore_tts(const char *base_url,
                         const char *input_text,
                         uint8_t **wav_out, size_t *wav_len_out);
 
+/*
+ * GET <base_url><path>. Returns ESP_OK if the server responds with any 2xx.
+ * Used for boot-time health probes against /api/status, /api/tts/health,
+ * /api/stt/health. Non-fatal: caller decides how to react.
+ */
+esp_err_t havencore_get_ok(const char *base_url, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

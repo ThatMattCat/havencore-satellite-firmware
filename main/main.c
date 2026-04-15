@@ -33,6 +33,20 @@
 static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
 
+/* Boot-time health probes. Non-blocking: we report results to the log but
+ * always proceed to ready. Plan.md §Verification Plan item 1. */
+static void boot_health_task(void *arg)
+{
+    while (wifi_connected_already() != WIFI_STATUS_CONNECTED_OK) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+    havencore_get_ok(sys_param->url, "/api/status");
+    havencore_get_ok(sys_param->url, "/api/stt/health");
+    havencore_get_ok(sys_param->url, "/api/tts/health");
+    vTaskDelete(NULL);
+}
+
 /* One full turn: STT -> chat -> TTS -> playback. Called from app_audio.c
  * once an utterance has been captured into `audio` (WAV, 16kHz/16-bit mono).
  * Base URL for HavenCore comes from NVS (sys_param->url). */
@@ -75,7 +89,7 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
     ui_ctrl_label_show_text(UI_CTRL_LABEL_REPLY_CONTENT, reply);
     sat_state_set(SAT_STATE_SPEAKING);
 
-    ret = havencore_tts(sys_param->url, "af_heart", reply,
+    ret = havencore_tts(sys_param->url, sys_param->voice, reply,
                        &tts_wav, &tts_wav_len);
     if (ret != ESP_OK || tts_wav == NULL || tts_wav_len == 0) {
         sat_state_set(SAT_STATE_ERROR);
@@ -149,12 +163,14 @@ void app_main()
     bsp_display_backlight_on();
     ui_ctrl_init();
     sat_state_init();
-    wake_word_set_enabled(false);
+    wake_word_set_enabled(sys_param->wake_enabled != 0);
     app_network_start();
 
     ESP_LOGI(TAG, "speech recognition start");
     app_sr_start(false);
     audio_register_play_finish_cb(audio_play_finish_cb);
+
+    xTaskCreate(&boot_health_task, "boot_health", 4 * 1024, NULL, 3, NULL);
 
     while (true) {
 

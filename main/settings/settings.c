@@ -66,11 +66,26 @@ esp_err_t settings_read_parameter_from_nvs(void)
         goto err;
     }
 
+    // Read voice (optional; defaults to af_heart if absent)
+    len = sizeof(g_sys_param.voice);
+    esp_err_t voice_ret = nvs_get_str(my_handle, "voice", g_sys_param.voice, &len);
+    if (voice_ret != ESP_OK || len == 0) {
+        strlcpy(g_sys_param.voice, "af_heart", sizeof(g_sys_param.voice));
+    }
+
+    // Read wake_enabled (optional; defaults to 0 / touch-to-talk only)
+    uint8_t wake = 0;
+    if (nvs_get_u8(my_handle, "wake_enabled", &wake) != ESP_OK) {
+        wake = 0;
+    }
+    g_sys_param.wake_enabled = wake;
+
     nvs_close(my_handle);
 
     ESP_LOGI(TAG, "stored ssid:%s", g_sys_param.ssid);
     ESP_LOGI(TAG, "stored password:%s", g_sys_param.password);
     ESP_LOGI(TAG, "stored Base URL:%s", g_sys_param.url);
+    ESP_LOGI(TAG, "voice:%s wake_enabled:%u", g_sys_param.voice, g_sys_param.wake_enabled);
     return ESP_OK;
 
 err:

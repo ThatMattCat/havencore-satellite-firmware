@@ -267,3 +267,34 @@ cleanup:
     free(body);
     return ret;
 }
+
+esp_err_t havencore_get_ok(const char *base_url, const char *path)
+{
+    char url[256];
+    if (build_url(base_url, path, url, sizeof(url)) != ESP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 5000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return ESP_FAIL;
+
+    esp_err_t ret = esp_http_client_perform(client);
+    if (ret == ESP_OK) {
+        int status = esp_http_client_get_status_code(client);
+        if (status < 200 || status >= 300) {
+            ESP_LOGW(TAG, "health %s -> HTTP %d", path, status);
+            ret = ESP_FAIL;
+        } else {
+            ESP_LOGI(TAG, "health %s -> HTTP %d", path, status);
+        }
+    } else {
+        ESP_LOGW(TAG, "health %s failed: %s", path, esp_err_to_name(ret));
+    }
+    esp_http_client_cleanup(client);
+    return ret;
+}
