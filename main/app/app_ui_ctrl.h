@@ -17,6 +17,7 @@ typedef enum {
     UI_CTRL_PANEL_LISTEN,
     UI_CTRL_PANEL_GET,
     UI_CTRL_PANEL_REPLY,
+    UI_CTRL_PANEL_ERROR,
 } ui_ctrl_panel_t;
 
 typedef enum {

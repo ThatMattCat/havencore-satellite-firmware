@@ -8,6 +8,7 @@
 
 #include "app_ui_ctrl.h"
 #include "app_wifi.h"
+#include "debug_overlay.h"
 #include "bsp/esp-bsp.h"
 
 #include "ui_helpers.h"
@@ -19,6 +20,7 @@
 #define WIFI_CHECK_TIMER_INTERVAL_S     (1)
 #define REPLY_SCROLL_TIMER_INTERVAL_MS  (1000)
 #define REPLY_SCROLL_SPEED              (1)
+#define ERROR_AUTO_RETURN_S             (3)
 
 static char *TAG = "ui_ctrl";
 
@@ -29,14 +31,26 @@ static bool reply_audio_end = false;
 static bool reply_content_get = false;
 static uint16_t content_height = 0;
 
+/* Hand-built ERROR panel — sibling of ui_PanelSleep/Listen/Get/Reply under
+ * ui_ScreenListen. Lives here (not in main/ui/) so SquareLine regeneration
+ * won't clobber it. */
+static lv_obj_t *err_panel = NULL;
+static lv_obj_t *err_label_message = NULL;
+static lv_obj_t *err_label_countdown = NULL;
+static lv_timer_t *err_countdown_timer = NULL;
+static uint8_t err_countdown_remaining = 0;
+
 static void reply_content_scroll_timer_handler();
 static void wifi_check_timer_handler(lv_timer_t *timer);
+static void err_panel_build(void);
+static void err_countdown_timer_cb(lv_timer_t *t);
 
 void ui_ctrl_init(void)
 {
     bsp_display_lock(0);
 
     ui_init();
+    err_panel_build();
 
     scroll_timer_handle = lv_timer_create(reply_content_scroll_timer_handler, REPLY_SCROLL_TIMER_INTERVAL_MS / REPLY_SCROLL_SPEED, NULL);
     lv_timer_pause(scroll_timer_handle);
@@ -44,6 +58,66 @@ void ui_ctrl_init(void)
     lv_timer_create(wifi_check_timer_handler, WIFI_CHECK_TIMER_INTERVAL_S * 1000, NULL);
 
     bsp_display_unlock();
+}
+
+static void err_panel_build(void)
+{
+    lv_obj_t *parent = lv_obj_get_parent(ui_PanelSleep);
+    if (!parent) return;
+
+    err_panel = lv_obj_create(parent);
+    lv_obj_set_size(err_panel, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(err_panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(err_panel, lv_color_hex(0x1a1a1a), 0);
+    lv_obj_set_style_bg_opa(err_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(err_panel, 0, 0);
+    lv_obj_set_style_pad_all(err_panel, 20, 0);
+    lv_obj_set_flex_flow(err_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(err_panel,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(err_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(err_panel, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *title = lv_label_create(err_panel);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xff5555), 0);
+    lv_obj_set_style_text_font(title, &ui_font_PingFangEN20, 0);
+    lv_label_set_text(title, "Error");
+
+    err_label_message = lv_label_create(err_panel);
+    lv_obj_set_style_text_color(err_label_message, lv_color_white(), 0);
+    lv_obj_set_style_text_font(err_label_message, &ui_font_PingFangEN16, 0);
+    lv_label_set_long_mode(err_label_message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(err_label_message, LV_PCT(100));
+    lv_obj_set_style_text_align(err_label_message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_top(err_label_message, 12, 0);
+    lv_label_set_text(err_label_message, "");
+
+    err_label_countdown = lv_label_create(err_panel);
+    lv_obj_set_style_text_color(err_label_countdown, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(err_label_countdown, &ui_font_PingFangEN14, 0);
+    lv_obj_set_style_pad_top(err_label_countdown, 16, 0);
+    lv_label_set_text(err_label_countdown, "");
+
+    err_countdown_timer = lv_timer_create(err_countdown_timer_cb, 1000, NULL);
+    lv_timer_pause(err_countdown_timer);
+}
+
+static void err_countdown_timer_cb(lv_timer_t *t)
+{
+    if (err_countdown_remaining > 0) {
+        err_countdown_remaining--;
+    }
+    if (err_countdown_remaining == 0) {
+        lv_timer_pause(t);
+        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 0);
+        return;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "Returning in %us",
+             (unsigned)err_countdown_remaining);
+    lv_label_set_text(err_label_countdown, buf);
 }
 
 static void wifi_check_timer_handler(lv_timer_t *timer)
@@ -70,48 +144,63 @@ static void wifi_check_timer_handler(lv_timer_t *timer)
 static void show_panel_timer_handler(struct _lv_timer_t *t)
 {
     ui_ctrl_panel_t panel = (ui_ctrl_panel_t)t->user_data;
-    lv_obj_t *show_panel = NULL;
-    lv_obj_t *hide_panel[3] = { NULL };
+    lv_obj_t *show = NULL;
+
+    /* Hide every panel up-front so adding a new panel only means adding
+     * one line here plus a case below, not editing each other case's
+     * per-target hide list. */
+    lv_obj_add_flag(ui_PanelSleep, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_PanelListen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_PanelGet, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_PanelReply, LV_OBJ_FLAG_HIDDEN);
+    if (err_panel) {
+        lv_obj_add_flag(err_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (err_countdown_timer) {
+        lv_timer_pause(err_countdown_timer);
+    }
 
     switch (panel) {
     case UI_CTRL_PANEL_SLEEP:
-        show_panel = ui_PanelSleep;
-        hide_panel[0] = ui_PanelListen;
-        hide_panel[1] = ui_PanelGet;
-        hide_panel[2] = ui_PanelReply;
+        show = ui_PanelSleep;
         lv_obj_clear_flag(ui_ImageListenSettings, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(ui_LabelListenSpeak, " ");
         break;
     case UI_CTRL_PANEL_LISTEN:
-        show_panel = ui_PanelListen;
-        hide_panel[0] = ui_PanelSleep;
-        hide_panel[1] = ui_PanelGet;
-        hide_panel[2] = ui_PanelReply;
+        show = ui_PanelListen;
         lv_obj_clear_flag(ui_LabelListenSpeak, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(ui_LabelListenSpeak, "Listening ...");
-        // Reset flags and timer of reply
         reply_content_get = false;
         reply_audio_start = false;
         reply_audio_end = false;
         lv_timer_pause(scroll_timer_handle);
         break;
     case UI_CTRL_PANEL_GET:
-        show_panel = ui_PanelGet;
-        hide_panel[0] = ui_PanelSleep;
-        hide_panel[1] = ui_PanelListen;
-        hide_panel[2] = ui_PanelReply;
+        show = ui_PanelGet;
         lv_obj_clear_flag(ui_LabelListenSpeak, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(ui_LabelListenSpeak, "Thinking ...");
         break;
     case UI_CTRL_PANEL_REPLY:
-        show_panel = ui_PanelReply;
-        hide_panel[0] = ui_PanelSleep;
-        hide_panel[1] = ui_PanelListen;
-        hide_panel[2] = ui_PanelGet;
-        lv_obj_add_flag(ui_ImageListenSettings, LV_OBJ_FLAG_HIDDEN);
+        show = ui_PanelReply;
         lv_obj_add_flag(ui_ImageListenSettings, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ui_LabelListenSpeak, LV_OBJ_FLAG_HIDDEN);
         break;
+    case UI_CTRL_PANEL_ERROR: {
+        show = err_panel;
+        const char *err = debug_overlay_get_last_error();
+        lv_label_set_text(err_label_message,
+                          (err && err[0]) ? err : "unknown error");
+        err_countdown_remaining = ERROR_AUTO_RETURN_S;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Returning in %us",
+                 (unsigned)err_countdown_remaining);
+        lv_label_set_text(err_label_countdown, buf);
+        if (err_countdown_timer) {
+            lv_timer_reset(err_countdown_timer);
+            lv_timer_resume(err_countdown_timer);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -120,13 +209,10 @@ static void show_panel_timer_handler(struct _lv_timer_t *t)
         lv_obj_clear_flag(ui_ImageListenSettings, LV_OBJ_FLAG_HIDDEN);
     }
 
-    lv_obj_clear_flag(show_panel, LV_OBJ_FLAG_HIDDEN);
-    for (int i = 0; i < sizeof(hide_panel) / sizeof(lv_obj_t *); i++) {
-        lv_obj_add_flag(hide_panel[i], LV_OBJ_FLAG_HIDDEN);
+    if (show) {
+        lv_obj_clear_flag(show, LV_OBJ_FLAG_HIDDEN);
     }
-
     current_panel = panel;
-
     ESP_LOGI(TAG, "Swich to panel[%d]", panel);
 }
 

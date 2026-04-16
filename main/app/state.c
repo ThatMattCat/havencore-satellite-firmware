@@ -40,7 +40,7 @@ void sat_state_set(sat_state_t s)
         ui_ctrl_show_panel(UI_CTRL_PANEL_REPLY, 0);
         break;
     case SAT_STATE_ERROR:
-        ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 3000);
+        ui_ctrl_show_panel(UI_CTRL_PANEL_ERROR, 0);
         break;
     }
 }

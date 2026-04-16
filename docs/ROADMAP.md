@@ -55,10 +55,6 @@ Each of these is intentionally out of scope today. Notes below describe the plan
 
 `wake_word.{h,c}` is currently a runtime gate stub returning `false`. Plan: integrate Picovoice Porcupine's ESP32-S3 export once we have the `.ppn` keyword file and the Xtensa static lib. Wire it so `wake_word_enabled()` checks both NVS (`wake_enabled`) and Porcupine init success. The ESP-SR AFE pipeline already runs and already supplies VAD endpointing, so the wake-word integration only needs to replace the `res->wakeup_state == WAKENET_DETECTED` branch in `audio_detect_task`.
 
-### Dedicated ERROR screen with countdown
-
-ERROR currently routes to the SLEEP panel with a 3 s auto-return. Plan.md's table asks for a dedicated screen with the error message and a visible countdown. Would mean a new SquareLine panel (`ui_PanelError`) and a corresponding case in `sat_state_set()`. Low priority — the auto-return already recovers cleanly.
-
 ### Configurable 15 s cap / silence threshold
 
 Neither constant is exposed via NVS yet. Add as optional keys when the defaults prove wrong in practice.

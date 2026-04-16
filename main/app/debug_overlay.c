@@ -119,3 +119,8 @@ void debug_overlay_set_last_error(const char *msg)
         strlcpy(s_last_error, msg, sizeof(s_last_error));
     }
 }
+
+const char *debug_overlay_get_last_error(void)
+{
+    return s_last_error;
+}

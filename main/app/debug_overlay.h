@@ -16,6 +16,7 @@ extern "C" {
  */
 void debug_overlay_init(void);
 void debug_overlay_set_last_error(const char *msg);
+const char *debug_overlay_get_last_error(void);
 
 #ifdef __cplusplus
 }
