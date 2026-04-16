@@ -16,13 +16,32 @@ static const char *TAG = "havencore";
 #define TTS_PATH           "/v1/audio/speech"
 #define HTTP_TIMEOUT_MS    30000
 
+/* Copy base_url into out, trimming trailing '/' and a trailing "/v1"
+ * segment if present — NVS values like "http://host/v1/" are a common
+ * misconfiguration and would otherwise produce "/v1//v1/audio/..." URLs. */
 static esp_err_t build_url(const char *base_url, const char *path,
                            char *out, size_t out_sz)
 {
-    int n = snprintf(out, out_sz, "%s%s", base_url, path);
-    if (n < 0 || (size_t)n >= out_sz) {
+    if (!base_url || !path) return ESP_ERR_INVALID_ARG;
+
+    size_t blen = strlen(base_url);
+    while (blen > 0 && base_url[blen - 1] == '/') blen--;
+    if (blen >= 3 &&
+        base_url[blen - 3] == '/' &&
+        base_url[blen - 2] == 'v' &&
+        base_url[blen - 1] == '1') {
+        blen -= 3;
+        static bool warned = false;
+        if (!warned) {
+            ESP_LOGW(TAG, "stripping trailing /v1 from base_url; set NVS to scheme://host[:port] only");
+            warned = true;
+        }
+    }
+    if (blen == 0 || blen + strlen(path) + 1 > out_sz) {
         return ESP_ERR_INVALID_SIZE;
     }
+    memcpy(out, base_url, blen);
+    strcpy(out + blen, path);
     return ESP_OK;
 }
 

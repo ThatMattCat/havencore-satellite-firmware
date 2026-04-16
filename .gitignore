@@ -5,3 +5,7 @@ managed_components/
 dependencies.lock
 .DS_Store
 *.swp
+
+# Contains Wi-Fi credentials + server URL; use nvs_config.example.csv as the template.
+nvs.bin
+nvs_config.csv

@@ -2,18 +2,37 @@
 
 Tracks known issues, deferred work, and planned improvements. The authoritative spec remains [`../plan.md`](../plan.md); this document captures what's left on top of what's already built.
 
-## Known issues (blocking first flash)
+## Current status (2026-04-15)
 
-### `ota_0` partition too small
+First successful flash + boot. Device reaches READY and runs its health checks against the HavenCore host. Pipeline itself is untested — blocked on server reachability.
 
-Current binary is ~3.5 MB; `ota_0` is 2 MB. Flashing will fail.
+What's working (observed on-device):
+- Boot, PSRAM init, LVGL start, GT911 touch init (BSP patch applied).
+- Wi-Fi connects to `Renman` → DHCP `10.0.0.147`.
+- NVS reads `ssid / password / Base_url / voice / wake_enabled`.
+- `build_url()` strips trailing `/v1/` from the stored base URL and logs a one-shot warning (as designed).
+- ESP-SR AFE + wakenet load; feed/detect tasks running; wake-word gated off via `wake_enabled=0`.
 
-- Seed was built for a smaller app (no extra HTTP client code, fewer components pulled in by IDF 5.5).
-- Fix candidates:
-  1. Grow `ota_0` in `partitions.csv` to ~4 MB (reduces `storage`/`srmodels` headroom).
-  2. Drop the UF2 factory partition for dev builds — skip the mass-storage provisioning path and write NVS via `nvs_flash` host tool instead.
-  3. Strip ESP-SR models we don't use (we only need one wake-word model, not the full set).
-- Before flashing, resolve this one way or the other.
+What's blocked:
+- All three health checks return HTTP 502 against `http://ai.renman.wtf` (old host). The HavenCore agent has moved to `selene.renman.wtf` and is now fronted by nginx. Current NVS still points at the old URL.
+- Firmware has **no TLS** — `esp-tls` / cert bundle is not enabled. Server side must expose plain HTTP for the satellite, or we add TLS (deferred item below) before resuming.
+
+Resume checklist (next session):
+1. Confirm `http://selene.renman.wtf/api/status` returns 200 from the dev box.
+2. Erase NVS and reprovision via UF2:
+   ```
+   idf.py -p /dev/ttyACM0 erase-region 0x9000 0x4000
+   ```
+   Reset; the device boots into the UF2 factory partition and mounts as USB mass-storage. Write `Base_url=http://selene.renman.wtf` (no `/v1/` suffix — the client appends it), plus SSID / password.
+3. Reset back into the app; watch the monitor for `health /api/status -> HTTP 200`.
+4. Tap the screen and speak a short phrase; expect STT → chat → TTS round-trip with audible reply.
+5. Walk through `plan.md` §Verification Plan items 1–6 (see below).
+
+## Known issues
+
+### BSP touch init patch (`managed_components/` is gitignored)
+
+`esp-box-3` 1.1.3 uses the legacy `esp_lcd_new_panel_io_i2c_v1` path, which rejects a non-zero `scl_speed_hz`. Newer `esp_lcd_touch_tt21100` macros set that field, so the BSP crashes in `bsp_touch_new()` on boot. Fix is a one-line patch that clears `tp_io_config.scl_speed_hz` before the call. Because `managed_components/` is gitignored and regenerated on `idf.py fullclean`, the patch lives under `patches/esp-box-3-scl_speed_hz.patch`. Run `./patches/apply.sh` after any re-resolve. Drop this workaround when the BSP moves to the new `i2c_master` driver.
 
 ## MVP verification (Phase 6 of the original plan)
 

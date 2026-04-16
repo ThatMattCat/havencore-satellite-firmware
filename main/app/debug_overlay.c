@@ -7,6 +7,7 @@
 #include "debug_overlay.h"
 #include "state.h"
 #include "settings.h"
+#include "ui/ui.h"
 #include "lvgl.h"
 #include "esp_wifi.h"
 #include "esp_heap_caps.h"
@@ -70,9 +71,11 @@ void debug_overlay_init(void)
 {
     bsp_display_lock(0);
 
-    lv_obj_t *scr = lv_scr_act();
-
-    s_panel = lv_obj_create(scr);
+    /* Parent to the display's top layer so the overlay floats above any
+     * SquareLine screen (Sleep/Listen/Get/Reply are separate screens, and
+     * parenting to lv_scr_act() would bind us to whichever one is active
+     * at init time). */
+    s_panel = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_panel, 280, 180);
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_panel, lv_color_black(), 0);
@@ -89,9 +92,18 @@ void debug_overlay_init(void)
     lv_obj_set_width(s_label, 264);
     lv_label_set_text(s_label, "");
 
-    /* Catch long-press on the active screen. Default LVGL long-press
-     * threshold is 400ms; bump to ~1.5s so normal taps don't trigger. */
-    lv_obj_add_event_cb(scr, long_press_cb, LV_EVENT_LONG_PRESSED, NULL);
+    /* Register long-press on every panel we actually load via
+     * lv_disp_load_scr(). Attaching to lv_scr_act() at init would only
+     * cover the initial screen. */
+    lv_obj_t *panels[] = {
+        ui_PanelSleep, ui_PanelListen, ui_PanelGet, ui_PanelReply,
+    };
+    for (size_t i = 0; i < sizeof(panels) / sizeof(panels[0]); i++) {
+        if (panels[i]) {
+            lv_obj_add_event_cb(panels[i], long_press_cb,
+                                LV_EVENT_LONG_PRESSED, NULL);
+        }
+    }
 
     s_timer = lv_timer_create(refresh_timer_cb, 1000, NULL);
     lv_timer_pause(s_timer);

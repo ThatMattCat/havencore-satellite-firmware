@@ -1,0 +1,12 @@
+--- a/esp-box-3.c
++++ b/esp-box-3.c
+@@ -524,6 +524,9 @@
+         return ESP_ERR_NOT_FOUND;
+     }
+
++    /* Legacy esp_lcd_new_panel_io_i2c_v1 rejects non-zero scl_speed_hz;
++     * the TT21100 config macro in newer versions sets it, so strip here. */
++    tp_io_config.scl_speed_hz = 0;
+     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)BSP_I2C_NUM, &tp_io_config, &tp_io_handle), TAG, "");
+     if (ESP_LCD_TOUCH_IO_I2C_TT21100_ADDRESS == tp_io_config.dev_addr) {
+         ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_tt21100(tp_io_handle, &tp_cfg, ret_touch), TAG, "New tt21100 failed");
