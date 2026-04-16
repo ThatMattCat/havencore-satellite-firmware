@@ -134,6 +134,13 @@ static void audio_play_finish_cb(void)
 
 void app_main()
 {
+    /* bsp_codec_set_fs unconditionally closes both codec handles before
+     * reopening, so the very first call (and any close-while-closed in
+     * the BSP path) logs `E i2s_common: i2s_channel_disable(1218): the
+     * channel has not been enabled yet`. The BSP doesn't track codec
+     * state and the error is purely cosmetic — silence the tag. */
+    esp_log_level_set("i2s_common", ESP_LOG_NONE);
+
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
