@@ -65,9 +65,8 @@ audio_detect_task (app_sr.c, pinned core 1)
     on 100 frames of AFE_VAD_SILENCE -> posts ESP_MN_STATE_TIMEOUT
 
 sr_handler_task (app_audio.c, pinned core 0)
-    on WAKENET_DETECTED: audio_record_start(), sat_state_set(LISTENING),
-                         play /spiffs/echo_en_wake.wav
-    on ESP_MN_STATE_TIMEOUT: audio_record_stop(), play /spiffs/waitPlease.mp3,
+    on WAKENET_DETECTED: audio_record_start(), sat_state_set(LISTENING)
+    on ESP_MN_STATE_TIMEOUT: audio_record_stop(),
                              if Wi-Fi OK -> start_havencore_turn(record_buffer, len)
 
 start_havencore_turn (main.c)

@@ -97,11 +97,6 @@ esp_err_t start_havencore_turn(uint8_t *audio, int audio_len)
     if (ret != ESP_OK || tts_wav == NULL || tts_wav_len == 0) {
         debug_overlay_set_last_error("tts: empty/failed");
         sat_state_set(SAT_STATE_ERROR);
-        fp = fopen("/spiffs/tts_failed.mp3", "r");
-        if (fp) {
-            audio_player_play(fp);
-            fp = NULL;
-        }
         if (ret == ESP_OK) ret = ESP_ERR_INVALID_RESPONSE;
         ESP_GOTO_ON_ERROR(ret, err, TAG, "[tts]: no audio");
     }
@@ -131,7 +126,7 @@ err:
 
 static void audio_play_finish_cb(void)
 {
-    ESP_LOGI(TAG, "replay audio end");
+    ESP_LOGI(TAG, "tts playback done");
     if (ui_ctrl_reply_get_audio_start_flag()) {
         ui_ctrl_reply_set_audio_end_flag(true);
     }

@@ -179,106 +179,39 @@ static void audio_record_start()
 
 static esp_err_t audio_record_stop()
 {
-    esp_err_t ret = ESP_OK;
 #if DEBUG_SAVE_PCM
     record_flag = false;
 #if PCM_ONE_CHANNEL
-    record_total_len *= 1;
+    const int16_t num_channels = 1;
 #else
+    const int16_t num_channels = 2;
     record_total_len *= 2;
 #endif
     file_total_len += record_total_len;
-    ESP_LOGI(TAG, "### record Stop, %" PRIu32 " %" PRIu32 "K", \
-             record_total_len, \
-             record_total_len / 1024);
+    ESP_LOGI(TAG, "### record Stop, %" PRIu32 " %" PRIu32 "K",
+             record_total_len, record_total_len / 1024);
 
-    FILE *fp = fopen("/spiffs/echo_en_wake.wav", "r");
-    ESP_GOTO_ON_FALSE(NULL != fp, ESP_FAIL, err, TAG, "Failed create record file");
-
-    wav_header_t wav_head;
-    int len = fread(&wav_head, 1, sizeof(wav_header_t), fp);
-    ESP_GOTO_ON_FALSE(len > 0, ESP_FAIL, err, TAG, "Failed create record file");
-
-    wav_head.SampleRate = 16000;
-#if PCM_ONE_CHANNEL
-    wav_head.NumChannels = 1;
-#else
-    wav_head.NumChannels = 2;
-#endif
-    wav_head.BitsPerSample = 16;
-    wav_head.ChunkSize = file_total_len - 8;
-    wav_head.ByteRate = wav_head.SampleRate * wav_head.BitsPerSample * wav_head.NumChannels / 8;
-    wav_head.Subchunk2ID[0] = 'd';
-    wav_head.Subchunk2ID[1] = 'a';
-    wav_head.Subchunk2ID[2] = 't';
-    wav_head.Subchunk2ID[3] = 'a';
-    wav_head.Subchunk2Size = record_total_len;
+    const int32_t sample_rate = 16000;
+    const int16_t bits_per_sample = 16;
+    wav_header_t wav_head = {
+        .ChunkID       = {'R', 'I', 'F', 'F'},
+        .ChunkSize     = file_total_len - 8,
+        .Format        = {'W', 'A', 'V', 'E'},
+        .Subchunk1ID   = {'f', 'm', 't', ' '},
+        .Subchunk1Size = 16,
+        .AudioFormat   = 1, /* PCM */
+        .NumChannels   = num_channels,
+        .SampleRate    = sample_rate,
+        .ByteRate      = sample_rate * num_channels * bits_per_sample / 8,
+        .BlockAlign    = num_channels * bits_per_sample / 8,
+        .BitsPerSample = bits_per_sample,
+        .Subchunk2ID   = {'d', 'a', 't', 'a'},
+        .Subchunk2Size = record_total_len,
+    };
     memcpy((void *)record_audio_buffer, &wav_head, sizeof(wav_header_t));
     Cache_WriteBack_Addr((uint32_t)record_audio_buffer, record_total_len);
-
 #endif
-err:
-    if (fp) {
-        fclose(fp);
-    }
-    return ret;
-}
-
-esp_err_t audio_play_task(void *filepath)
-{
-    FILE *fp = NULL;
-    struct stat file_stat;
-    esp_err_t ret = ESP_OK;
-
-    const size_t chunk_size = 4096;
-    uint8_t *buffer = malloc(chunk_size);
-    ESP_GOTO_ON_FALSE(NULL != buffer, ESP_FAIL, EXIT, TAG, "buffer malloc failed");
-
-    ESP_GOTO_ON_FALSE(-1 != stat(filepath, &file_stat), ESP_FAIL, EXIT, TAG, "Failed to stat file");
-
-    fp = fopen(filepath, "r");
-    ESP_GOTO_ON_FALSE(NULL != fp, ESP_FAIL, EXIT, TAG, "Failed create record file");
-
-    wav_header_t wav_head;
-    int len = fread(&wav_head, 1, sizeof(wav_header_t), fp);
-    ESP_GOTO_ON_FALSE(len > 0, ESP_FAIL, EXIT, TAG, "Read wav header failed");
-
-    if (NULL == strstr((char *)wav_head.Subchunk1ID, "fmt") &&
-            NULL == strstr((char *)wav_head.Subchunk2ID, "data")) {
-        ESP_LOGI(TAG, "PCM format");
-        fseek(fp, 0, SEEK_SET);
-        wav_head.SampleRate = 16000;
-        wav_head.NumChannels = 2;
-        wav_head.BitsPerSample = 16;
-    }
-
-    ESP_LOGI(TAG, "frame_rate= %" PRIi32 ", ch=%d, width=%d", wav_head.SampleRate, wav_head.NumChannels, wav_head.BitsPerSample);
-    bsp_codec_set_fs(wav_head.SampleRate, wav_head.BitsPerSample, I2S_SLOT_MODE_STEREO);
-
-    bsp_codec_mute_set(true);
-    bsp_codec_mute_set(false);
-    bsp_codec_volume_set(CONFIG_VOLUME_LEVEL, NULL);
-
-    size_t cnt, total_cnt = 0;
-    do {
-        /* Read file in chunks into the scratch buffer */
-        len = fread(buffer, 1, chunk_size, fp);
-        if (len <= 0) {
-            break;
-        } else if (len > 0) {
-            bsp_i2s_write(buffer, len, &cnt, portMAX_DELAY);
-            total_cnt += cnt;
-        }
-    } while (1);
-
-EXIT:
-    if (fp) {
-        fclose(fp);
-    }
-    if (buffer) {
-        free(buffer);
-    }
-    return ret;
+    return ESP_OK;
 }
 
 void sr_handler_task(void *pvParam)
@@ -313,10 +246,6 @@ void sr_handler_task(void *pvParam)
         if (ESP_MN_STATE_TIMEOUT == result.state) {
             ESP_LOGI(TAG, "ESP_MN_STATE_TIMEOUT");
             audio_record_stop();
-            FILE *fp = fopen("/spiffs/waitPlease.mp3", "r");
-            if (fp) {
-                audio_player_play(fp);
-            }
             if (WIFI_STATUS_CONNECTED_OK == wifi_connected_already()) {
                 start_havencore_turn((uint8_t *)record_audio_buffer, record_total_len);
             }
@@ -325,19 +254,14 @@ void sr_handler_task(void *pvParam)
 
         if (WAKENET_DETECTED == result.wakenet_mode) {
             audio_record_start();
-
             ui_ctrl_guide_jump();
             sat_state_set(SAT_STATE_LISTENING);
-
-            audio_play_task("/spiffs/echo_en_wake.wav");
             continue;
         }
 
         if (ESP_MN_STATE_DETECTED & result.state) {
             ESP_LOGI(TAG, "STOP:%d", result.command_id);
             audio_record_stop();
-            audio_play_task("/spiffs/echo_en_ok.wav");
-            //How to stop the transmission, when start_havencore_turn begins.
             continue;
         }
     }

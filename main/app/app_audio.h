@@ -40,8 +40,6 @@ void sr_handler_task(void *pvParam);
  */
 extern uint8_t *audio_rx_buffer;
 
-esp_err_t audio_play_task(void *filepath);
-
 void audio_record_init();
 
 void audio_record_save(int16_t *audio_buffer, int audio_chunksize);
