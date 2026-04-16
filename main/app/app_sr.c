@@ -15,6 +15,7 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "app_sr.h"
 #include "esp_mn_speech_commands.h"
 #include "esp_process_sdkconfig.h"
@@ -39,6 +40,12 @@ static bool manul_detect_flag = false;
 sr_data_t *g_sr_data = NULL;
 
 #define I2S_CHANNEL_NUM      2
+
+/* Hard cap on how long we stay in LISTENING before force-ending the turn.
+ * VAD silence normally ends things at ~1.2 s — but a continuously noisy
+ * room can hold vad_state at SPEECH indefinitely, which would trap us in
+ * the LISTENING panel with the mic open. Plan.md specifies 15 s. */
+#define LISTEN_MAX_US        (15LL * 1000LL * 1000LL)
 
 extern bool record_flag;
 extern uint32_t record_total_len;
@@ -90,6 +97,7 @@ static void audio_detect_task(void *arg)
     static uint8_t frame_keep = 0;
 
     bool detect_flag = false;
+    int64_t detect_start_us = 0;
     esp_afe_sr_data_t *afe_data = arg;
 
     while (true) {
@@ -111,6 +119,9 @@ static void audio_detect_task(void *arg)
             };
             xQueueSend(g_sr_data->result_que, &result, 0);
         } else if (res->wakeup_state == WAKENET_CHANNEL_VERIFIED || manul_detect_flag) {
+            if (!detect_flag) {
+                detect_start_us = esp_timer_get_time();
+            }
             detect_flag = true;
             if (manul_detect_flag) {
                 manul_detect_flag = false;
@@ -135,7 +146,14 @@ static void audio_detect_task(void *arg)
                 frame_keep++;
             }
 
-            if ((100 == frame_keep) && (AFE_VAD_SILENCE == res->vad_state)) {
+            bool silence_cutoff = (100 == frame_keep) && (AFE_VAD_SILENCE == res->vad_state);
+            bool wallclock_cutoff = (esp_timer_get_time() - detect_start_us) > LISTEN_MAX_US;
+
+            if (silence_cutoff || wallclock_cutoff) {
+                if (wallclock_cutoff && !silence_cutoff) {
+                    ESP_LOGW(TAG, "listen hit %d s wall-clock cap",
+                             (int)(LISTEN_MAX_US / 1000000));
+                }
                 sr_result_t result = {
                     .wakenet_mode = WAKENET_NO_DETECT,
                     .state = ESP_MN_STATE_TIMEOUT,

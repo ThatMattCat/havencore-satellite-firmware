@@ -55,10 +55,6 @@ Each of these is intentionally out of scope today. Notes below describe the plan
 
 `wake_word.{h,c}` is currently a runtime gate stub returning `false`. Plan: integrate Picovoice Porcupine's ESP32-S3 export once we have the `.ppn` keyword file and the Xtensa static lib. Wire it so `wake_word_enabled()` checks both NVS (`wake_enabled`) and Porcupine init success. The ESP-SR AFE pipeline already runs and already supplies VAD endpointing, so the wake-word integration only needs to replace the `res->wakeup_state == WAKENET_DETECTED` branch in `audio_detect_task`.
 
-### 15 s hard cap on listening
-
-Today, only VAD silence (≈1.2 s) ends a turn. If the AFE never sees silence (noisy room, continuous speech), the mic keeps recording. Plan.md specifies a 15 s hard cap — add a wall-clock check inside `audio_detect_task` or `sr_handler_task` that force-posts `ESP_MN_STATE_TIMEOUT` after 15 s of `detect_flag == true`.
-
 ### Dedicated ERROR screen with countdown
 
 ERROR currently routes to the SLEEP panel with a 3 s auto-return. Plan.md's table asks for a dedicated screen with the error message and a visible countdown. Would mean a new SquareLine panel (`ui_PanelError`) and a corresponding case in `sat_state_set()`. Low priority — the auto-return already recovers cleanly.
