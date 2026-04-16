@@ -181,11 +181,20 @@ static esp_err_t audio_record_stop()
 {
 #if DEBUG_SAVE_PCM
     record_flag = false;
+
+    /* audio_record_save advances record_total_len by one per int16 slot
+     * written (i.e. once per sample in mono, twice per sample in stereo).
+     * Convert to bytes here — bytes is the unit the WAV header, the
+     * buffer length passed to havencore_stt, and file_total_len below
+     * all expect. Pre-fix mono only converted via `*= 1`, so mono
+     * uploads ended up half-length and STT transcripts dropped roughly
+     * the back half of every utterance. */
+    record_total_len *= 2;
+
 #if PCM_ONE_CHANNEL
     const int16_t num_channels = 1;
 #else
     const int16_t num_channels = 2;
-    record_total_len *= 2;
 #endif
     file_total_len += record_total_len;
     ESP_LOGI(TAG, "### record Stop, %" PRIu32 " %" PRIu32 "K",
