@@ -15,6 +15,7 @@
 #include "nvs.h"
 #include "settings.h"
 #include "esp_ota_ops.h"
+#include "esp_random.h"
 
 static const char *TAG = "settings";
 const char *uf2_nvs_partition = "nvs";
@@ -89,13 +90,30 @@ esp_err_t settings_read_parameter_from_nvs(void)
         strlcpy(g_sys_param.device_name, "Satellite", sizeof(g_sys_param.device_name));
     }
 
+    // Read session_id (optional; mint a random 32-hex-char blob on first boot)
+    len = sizeof(g_sys_param.session_id);
+    esp_err_t sid_ret = nvs_get_str(my_handle, "session_id", g_sys_param.session_id, &len);
+    bool mint_session_id = (sid_ret != ESP_OK || len == 0);
+
     nvs_close(my_handle);
+
+    if (mint_session_id) {
+        uint8_t buf[16];
+        esp_fill_random(buf, sizeof(buf));
+        for (int i = 0; i < 16; ++i) {
+            snprintf(&g_sys_param.session_id[i * 2], 3, "%02x", buf[i]);
+        }
+        g_sys_param.session_id[32] = '\0';
+        ESP_LOGI(TAG, "minted session_id=%s", g_sys_param.session_id);
+        settings_set_session_id(g_sys_param.session_id);
+    }
 
     ESP_LOGI(TAG, "stored ssid:%s", g_sys_param.ssid);
     ESP_LOGI(TAG, "stored password:%s", g_sys_param.password);
     ESP_LOGI(TAG, "stored Base URL:%s", g_sys_param.url);
-    ESP_LOGI(TAG, "voice:%s wake_enabled:%u device_name:%s",
-             g_sys_param.voice, g_sys_param.wake_enabled, g_sys_param.device_name);
+    ESP_LOGI(TAG, "voice:%s wake_enabled:%u device_name:%s session_id:%s",
+             g_sys_param.voice, g_sys_param.wake_enabled,
+             g_sys_param.device_name, g_sys_param.session_id);
     return ESP_OK;
 
 err:
@@ -141,5 +159,38 @@ esp_err_t settings_set_device_name(const char *name)
 
     strlcpy(g_sys_param.device_name, name, sizeof(g_sys_param.device_name));
     ESP_LOGI(TAG, "device_name set to \"%s\"", g_sys_param.device_name);
+    return ESP_OK;
+}
+
+esp_err_t settings_set_session_id(const char *id)
+{
+    if (!id) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open_from_partition(uf2_nvs_partition, uf2_nvs_namespace,
+                                            NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs open (rw) failed: 0x%x", ret);
+        return ret;
+    }
+
+    ret = nvs_set_str(handle, "session_id", id);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str session_id failed: 0x%x", ret);
+        nvs_close(handle);
+        return ret;
+    }
+
+    ret = nvs_commit(handle);
+    nvs_close(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_commit failed: 0x%x", ret);
+        return ret;
+    }
+
+    strlcpy(g_sys_param.session_id, id, sizeof(g_sys_param.session_id));
+    ESP_LOGI(TAG, "session_id set to \"%s\"", g_sys_param.session_id);
     return ESP_OK;
 }

@@ -15,7 +15,9 @@ What's working:
 - Boot, PSRAM init, LVGL start, GT911 touch init (BSP patch applied).
 - Wi-Fi + DHCP + three boot health probes (`/api/status`, `/api/stt/health`,
   `/api/tts/health`) all return 200 against `selene.renman.wtf`.
-- NVS reads `ssid / password / Base_url / voice / wake_enabled`.
+- NVS reads `ssid / password / Base_url / voice / wake_enabled / device_name / session_id`.
+- Chat traffic is on the first-party `/api/chat` endpoint (HTTP timeout 60 s). Verified 2026-04-18: full turn (wake → STT → `/api/chat` → TTS → playback) completes with `/api/chat` round-trip ≈ 1.1 s against `selene.renman.wtf`.
+- `X-Session-Id` is an NVS-persisted random 32-char hex blob minted on first boot and stable across reboots (verified 2026-04-18). Server-initiated rotation via the `X-Session-Id` response header is wired (`on_session_rotated` → `settings_set_session_id`) but not yet exercised on hardware — needs an LRU eviction / server restart to force a new id.
 - `build_url()` strips a trailing `/v1/` (one-shot warning) — keep it out of
   NVS to avoid the noise.
 - microWakeWord loaded from the `model` SPIFFS partition. Feed task
@@ -144,7 +146,7 @@ false-trigger spam — not worth it until the pipeline is rock-solid.
 
 ### ~~Multi-device identity (`X-Satellite-Id` header)~~ — shipped 2026-04-18
 
-Replaced by two headers stamped on every HavenCore request (see `components/havencore_client/havencore_client.c`): `X-Session-Id: selene-<mac-suffix>` (stable per-device, MAC-derived at boot) and `X-Device-Name` (user-entered room label, default `Satellite`, editable in the Settings screen and persisted in NVS as `device_name`).
+Replaced by two headers stamped on every HavenCore request (see `components/havencore_client/havencore_client.c`): `X-Session-Id` (NVS-persisted random 32-char hex blob minted on first boot; auto-rotated via the `/api/chat` response header) and `X-Device-Name` (user-entered room label, default `Satellite`, editable in the Settings screen and persisted in NVS as `device_name`).
 
 ### OTA updates
 

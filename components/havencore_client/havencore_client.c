@@ -6,35 +6,36 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
-#include "esp_mac.h"
 #include "cJSON.h"
 
 static const char *TAG = "havencore";
 
 #define MULTIPART_BOUNDARY "----hc-satellite-0XZ7mK"
 #define STT_PATH           "/v1/audio/transcriptions"
-#define CHAT_PATH          "/v1/chat/completions"
+#define CHAT_PATH          "/api/chat"
 #define TTS_PATH           "/v1/audio/speech"
-#define HTTP_TIMEOUT_MS    30000
+#define HTTP_TIMEOUT_MS    60000
 
-/* Identity headers sent on every HavenCore request. s_session_id is a stable
- * per-device value derived from the Wi-Fi MAC at boot; s_device_name is the
- * user-visible room label mirrored from NVS (settings.device_name). */
-static char s_session_id[16] = {0};
+/* Identity headers sent on every HavenCore request. s_session_id is an NVS-
+ * persisted random hex blob minted at first boot and rotated by the server
+ * via the X-Session-Id response header; s_device_name is the user-visible
+ * room label mirrored from NVS (settings.device_name). */
+static char s_session_id[40] = {0};
 static char s_device_name[32] = {0};
+static void (*s_session_changed_cb)(const char *new_id) = NULL;
 
-void havencore_client_init_session_id(void)
+void havencore_client_set_session_id(const char *id)
 {
-    if (s_session_id[0] != '\0') {
+    if (!id) {
+        s_session_id[0] = '\0';
         return;
     }
-    uint8_t mac[6] = {0};
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
-        snprintf(s_session_id, sizeof(s_session_id), "selene-%02x%02x", mac[4], mac[5]);
-    } else {
-        strlcpy(s_session_id, "selene-unknown", sizeof(s_session_id));
-    }
-    ESP_LOGI(TAG, "session id: %s", s_session_id);
+    strlcpy(s_session_id, id, sizeof(s_session_id));
+}
+
+void havencore_client_set_session_changed_cb(void (*cb)(const char *new_id))
+{
+    s_session_changed_cb = cb;
 }
 
 void havencore_client_set_device_name(const char *name)
@@ -223,13 +224,7 @@ esp_err_t havencore_chat(const char *base_url,
     if (ret != ESP_OK) return ret;
 
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "model", "selene");
-    cJSON_AddBoolToObject(root, "stream", false);
-    cJSON *messages = cJSON_AddArrayToObject(root, "messages");
-    cJSON *msg = cJSON_CreateObject();
-    cJSON_AddStringToObject(msg, "role", "user");
-    cJSON_AddStringToObject(msg, "content", user_text);
-    cJSON_AddItemToArray(messages, msg);
+    cJSON_AddStringToObject(root, "message", user_text);
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!body) return ESP_ERR_NO_MEM;
@@ -257,16 +252,24 @@ esp_err_t havencore_chat(const char *base_url,
     ret = read_body(client, &resp, &resp_len);
     if (ret != ESP_OK) goto cleanup;
 
+    /* Capture server-rotated session id before teardown. The hdr buffer is
+     * owned by the HTTP client and valid until esp_http_client_cleanup — do
+     * not free it. */
+    char *hdr = NULL;
+    if (esp_http_client_get_header(client, "X-Session-Id", &hdr) == ESP_OK
+        && hdr && *hdr && strcmp(hdr, s_session_id) != 0) {
+        ESP_LOGI(TAG, "session rotated: %s -> %s", s_session_id, hdr);
+        strlcpy(s_session_id, hdr, sizeof(s_session_id));
+        if (s_session_changed_cb) s_session_changed_cb(s_session_id);
+    }
+
     cJSON *r = cJSON_ParseWithLength((const char *)resp, resp_len);
     free(resp);
     if (!r) { ret = ESP_ERR_INVALID_RESPONSE; goto cleanup; }
 
-    cJSON *choices = cJSON_GetObjectItem(r, "choices");
-    cJSON *first = cJSON_GetArrayItem(choices, 0);
-    cJSON *message = cJSON_GetObjectItem(first, "message");
-    cJSON *content = cJSON_GetObjectItem(message, "content");
-    if (cJSON_IsString(content) && content->valuestring) {
-        strlcpy(reply_out, content->valuestring, reply_out_sz);
+    cJSON *response = cJSON_GetObjectItem(r, "response");
+    if (cJSON_IsString(response) && response->valuestring) {
+        strlcpy(reply_out, response->valuestring, reply_out_sz);
     } else {
         ret = ESP_ERR_INVALID_RESPONSE;
     }

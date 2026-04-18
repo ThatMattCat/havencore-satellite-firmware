@@ -32,6 +32,7 @@ The in-memory mirror is a single `sys_param_t` struct
 | `voice` | str | 32 | no | `af_heart` | esptool | TTS request body |
 | `wake_enabled` | u8 | 1 | no | `1` | esptool | `wake_word_set_enabled()` (currently hardcoded — see `CLAUDE.md`) |
 | `device_name` | str | 32 | no | `Satellite` | esptool OR Settings screen | `X-Device-Name` header on every HavenCore request |
+| `session_id` | str | 40 | no | *(minted at first boot)* | `settings_read_parameter_from_nvs()` first-boot mint; rewritten by `settings_set_session_id()` on server rotation | `X-Session-Id` header on every HavenCore request |
 
 **Required vs. optional** is a design choice enforced by
 `settings_read_parameter_from_nvs()`:
@@ -53,7 +54,7 @@ and before any consumer. The boot log summarizes what was read:
 settings: stored ssid:...
 settings: stored password:...
 settings: stored Base URL:...
-settings: voice:af_heart wake_enabled:1 device_name:Satellite
+settings: voice:af_heart wake_enabled:1 device_name:Satellite session_id:<32 hex chars>
 ```
 
 ## Write path
@@ -252,10 +253,16 @@ All of the above, plus:
 request by `components/havencore_client/havencore_client.c`. They
 demonstrate the full "NVS → client → wire" pipeline.
 
-- **`X-Session-Id`** — stable per-device, derived from the Wi-Fi STA
-  MAC at boot: `havencore_client_init_session_id()` formats
-  `selene-<last-4-hex>` into a file-static buffer. No NVS key; survives
-  factory reset because the MAC does.
+- **`X-Session-Id`** — NVS-persisted random 32-char hex blob. Minted
+  once in `settings_read_parameter_from_nvs()` if the `session_id` key
+  is absent (using `esp_fill_random()` + hex-encode, then persisted via
+  `settings_set_session_id()`). Loaded into the client with
+  `havencore_client_set_session_id()` at boot. The server owns rotation:
+  if `/api/chat` responds with a different `X-Session-Id` header,
+  `havencore_chat` captures it, invokes the change callback registered
+  from `main.c` (`on_session_rotated` → `settings_set_session_id`), and
+  uses the new id on subsequent requests. The result is that a rotated
+  id survives reboot without any user action.
 - **`X-Device-Name`** — mirrors `sys_param_t.device_name` into a
   separate file-static buffer via
   `havencore_client_set_device_name()`. Called (a) once at boot in

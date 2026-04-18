@@ -34,6 +34,13 @@
 static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
 
+/* Persist a server-rotated X-Session-Id back into NVS so subsequent boots
+ * pick up the new id. Fires on the HTTP task context from havencore_chat. */
+static void on_session_rotated(const char *new_id)
+{
+    settings_set_session_id(new_id);
+}
+
 /* Boot-time health probes. Non-blocking: we report results to the log but
  * always proceed to ready. */
 static void boot_health_task(void *arg)
@@ -151,7 +158,8 @@ void app_main()
     ESP_ERROR_CHECK(settings_read_parameter_from_nvs());
     sys_param = settings_get_parameter();
 
-    havencore_client_init_session_id();
+    havencore_client_set_session_id(sys_param->session_id);
+    havencore_client_set_session_changed_cb(on_session_rotated);
     havencore_client_set_device_name(sys_param->device_name);
 
     bsp_spiffs_mount();
