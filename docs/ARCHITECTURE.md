@@ -21,21 +21,32 @@ main/                    ESP-IDF component "main" — app code
   main.c                 app_main, per-turn orchestration, boot_health_task
   app/
     app_audio.c          I2S RX ring buffer, WAV playback, sr_handler_task
-    app_sr.c             ESP-SR AFE + wakenet/VAD pipeline (3 pinned tasks)
+    app_sr.c             audio feed/detect tasks: I2S → downmix →
+                         microwakeword + simple_vad + record buffer
+    simple_vad.c         tiny RMS-energy VAD with adaptive noise floor
+                         (listen-window silence cutoff; replaces AFE VAD)
     app_wifi.c           Wi-Fi provisioning + event-driven reconnect
     app_ui_ctrl.c        LVGL panel switcher for the four SquareLine screens
     app_ui_events.c      LVGL button callbacks (tap-to-talk, factory reset)
     state.c              turn-level FSM: IDLE/LISTENING/UPLOADING/THINKING/SPEAKING/ERROR
-    wake_word.c          runtime gate (default off) for the ESP-SR wakenet branch
+    wake_word.c          runtime gate for the microWakeWord detector
+                         (currently hardcoded on — see ROADMAP)
     debug_overlay.c      long-press diagnostic overlay (LVGL)
   settings/              NVS wrapper (sys_param_t with ssid/password/url/voice/wake_enabled)
   ui/                    SquareLine-generated LVGL screens (ui_Panel{Sleep,Listen,Get,Reply})
 
 components/bsp/          BOX/BOX-3/BOX-Lite BSP selector wrapper
+components/microwakeword/
+                         clean-room microWakeWord runtime:
+                         int8 TFLite streaming model + micro_speech frontend,
+                         16 kHz mono PCM in → mww_poll_detected()
 components/havencore_client/
                          HTTP client for /v1/audio/transcriptions,
                          /v1/chat/completions, /v1/audio/speech,
                          plus havencore_get_ok() for boot health probes
+
+model/                   microWakeWord artifacts (hey_selene_v1.tflite +
+                         manifest); flashed into the "model" SPIFFS partition
 ```
 
 ## Boot sequence
@@ -43,26 +54,33 @@ components/havencore_client/
 `app_main()` in `main/main.c`:
 
 1. `nvs_flash_init()` — initialize NVS, erase+reinit if corrupt.
-2. `settings_read_parameter_from_nvs()` — read ssid/password/`Base_url`; fall back to UF2 factory partition if missing.
+2. `settings_read_parameter_from_nvs()` — read ssid/password/`Base_url`; *supposed to* fall back to the UF2 factory partition if missing, but that path is currently broken (see [ROADMAP.md](ROADMAP.md)).
 3. `bsp_spiffs_mount()` + `bsp_i2c_init()` + `bsp_display_start_with_config()` — bring up storage, I²C, LCD.
 4. `bsp_board_init()` — audio codec, buttons, touch.
 5. `ui_ctrl_init()` — LVGL panels + wifi-check timer.
 6. `debug_overlay_init()` — install long-press handler on the active screen.
 7. `sat_state_init()` — force UI to IDLE (SLEEP panel).
-8. `wake_word_set_enabled(sys_param->wake_enabled != 0)` — typically off.
+8. `wake_word_set_enabled(sys_param->wake_enabled != 0)` — NVS default is 1, so typically on unless explicitly disabled. **Currently a no-op:** `wake_word.c` hardcodes `wake_word_enabled()` to `true` as a temporary workaround for the broken UF2 factory-reset flow; see the note in `wake_word.c` and ROADMAP "Wake-word (microWakeWord)".
 9. `app_network_start()` — kick off Wi-Fi (synchronous until first attempt).
-10. `app_sr_start(false)` — spawn ESP-SR feed/detect/handler tasks.
+10. `app_sr_start(false)` — mount the `model` SPIFFS partition, `mww_init()` the wake-word detector, spawn the feed + detect tasks pinned to cores 0/1.
 11. `boot_health_task` — one-shot task: waits for Wi-Fi, probes `/api/status`, `/api/stt/health`, `/api/tts/health`; logs results only.
 
 ## Turn flow
 
-Trigger: user taps the SLEEP panel. `EventPanelSleepClickCb` → `app_sr_start_once()` sets `manul_detect_flag = true`.
+Trigger: user taps the SLEEP panel (sets `manul_detect_flag = true`) **or** microWakeWord matches on the live mono feed.
 
 ```
+audio_feed_task (app_sr.c, pinned core 0)
+    reads stereo I2S (20 ms / 320 samples / 1280 B)
+    downmixes to mono (right slot — both channels carry the same room mic)
+    fans out: mww_feed_pcm() + simple_vad_feed() + audio_record_save()
+
 audio_detect_task (app_sr.c, pinned core 1)
-    sees manul_detect_flag -> posts WAKENET_DETECTED onto result_que
-    disables wakenet, starts VAD-watching detect_flag
-    on 100 frames of AFE_VAD_SILENCE -> posts ESP_MN_STATE_TIMEOUT
+    polls at 20 ms. Either mww_poll_detected() [gated by wake_word_enabled()]
+      or manul_detect_flag flips detect_flag=true and posts WAKENET_DETECTED.
+    Locks simple_vad's noise floor for the listen window.
+    Ends the window when either 60 silence frames (≈1.2 s) after the first
+      SPEECH frame, or 15 s wall-clock — posts ESP_MN_STATE_TIMEOUT.
 
 sr_handler_task (app_audio.c, pinned core 0)
     on WAKENET_DETECTED: audio_record_start(), sat_state_set(LISTENING)
@@ -93,7 +111,7 @@ ERROR transitions show the SLEEP panel with a 3000 ms auto-return.
 | SPEAKING     | `UI_CTRL_PANEL_REPLY`| chat completes, before TTS request       |
 | ERROR        | `UI_CTRL_PANEL_SLEEP` (3 s)| any HTTP failure along the turn    |
 
-Wake-word is gated at the source in `audio_detect_task`: real `WAKENET_DETECTED` events are ignored unless `wake_word_enabled()` returns true, so the ESP-SR pipeline still runs and still provides VAD endpointing, but the wake-word itself never starts a turn. The manual-trigger path (touch → `manul_detect_flag`) re-uses the same code path inside `audio_detect_task` and therefore still works.
+Wake-word is gated at the source in `audio_detect_task`: `mww_poll_detected()` only triggers a LISTENING transition when `wake_word_enabled()` returns true. The feed path keeps calling `mww_feed_pcm()` unconditionally — skipping feeds while listening would tear the streaming model's hidden state. The manual-trigger path (touch → `manul_detect_flag`) is always on and re-uses the same detect-flag flow, so touch-to-talk works even if `wake_word_enabled()` returns false.
 
 ## HTTP client contracts
 
@@ -116,14 +134,16 @@ The debug overlay (`main/app/debug_overlay.c`) is an LVGL object appended to the
 
 ## Flash layout
 
-See `partitions.csv`. Notable partitions on 16 MB flash:
+See `partitions.csv`. Layout on 16 MB flash (post-microWakeWord rebalance):
 
-| Name         | Offset  | Size    | Use                                    |
-| ------------ | ------- | ------- | -------------------------------------- |
-| `nvs`        | 0x9000  | 24 KB   | Wi-Fi credentials + agent config       |
-| `ota_0`      | 0x700000| 2 MB    | UF2 factory app (provisioning)         |
-| `factory`    | 0x10000 | ~6.8 MB | main app image                         |
-| `storage`    | 0x900000| 2 MB    | SPIFFS (audio prompts)                 |
-| `srmodels`   | 0xB00000| ~5 MB   | ESP-SR wakenet/VAD models              |
+| Name      | Offset    | Size    | Use                                                    |
+| --------- | --------- | ------- | ------------------------------------------------------ |
+| `nvs`     | 0x9000    | 16 KB   | Wi-Fi credentials + agent config                       |
+| `otadata` | 0xd000    | 8 KB    | OTA boot selection                                     |
+| `phy_init`| 0xf000    | 4 KB    | RF calibration                                         |
+| `factory` | 0x10000   | 6 MB    | main app image                                         |
+| `ota_0`   | 0x700000  | 5 MB    | TinyUF2 factory app (provisioning fallback)            |
+| `storage` | 0xc00000  | 2 MB    | SPIFFS — audio prompts in `spiffs/`                    |
+| `model`   | 0xe00000  | 1 MB    | SPIFFS — microWakeWord `.tflite` + `.json` in `model/` |
 
-Known issue: `ota_0` at 2 MB is smaller than the current app image (~3.5 MB). This is tracked in [ROADMAP.md](ROADMAP.md).
+No more `srmodels` partition — ESP-SR was removed in the microWakeWord migration. `ota_0` is kept large enough for the TinyUF2 factory app; shrinking it would break the UF2 provisioning flow once that's unbroken.

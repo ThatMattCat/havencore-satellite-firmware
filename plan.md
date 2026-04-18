@@ -46,9 +46,9 @@ HavenCore Satellite — ESP32-S3-BOX-3 MVP Spec
  ├────────────┼────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
  │ UI library │ LVGL (via BSP)                 │ Already used by chatgpt_demo; simple state screens                                          │
  ├────────────┼────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
- │            │ Porcupine, re-exported for     │ User has a "Hey Selene" keyword trained on Picovoice Console; re-export targeting           │
- │ Wake word  │ ESP32-S3 + touch-to-talk       │ ESP32-S3-BOX-3 gets a working .ppn + Xtensa .a library. Touch-to-talk ships first so        │
- │            │ fallback                       │ end-to-end works before the wake-word model is in hand.                                     │
+ │            │ microWakeWord (streaming       │ Open-source, trainable in Colab, runs on ESP32-S3 via TFLite-Micro. Replaced the earlier    │
+ │ Wake word  │ int8 TFLite) + touch-to-talk   │ Porcupine plan after the trained "Hey Selene" model produced a clean hit rate on-device.    │
+ │            │ fallback                       │ Touch-to-talk always works as a fallback regardless of model state.                         │
  ├────────────┼────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
  │ Transport  │ REST chain: STT → chat → TTS   │ Matches chatgpt_demo; simplest firmware; ~3–8s end-to-end is acceptable                     │
  │            │ over HTTP                      │                                                                                             │
@@ -63,7 +63,7 @@ HavenCore Satellite — ESP32-S3-BOX-3 MVP Spec
  Reference projects to study first
 
  - Espressif chatgpt_demo — https://github.com/espressif/esp-box/tree/master/examples/chatgpt_demo (the template we're adapting)
- - Picovoice Porcupine ESP32-S3 quick start — https://picovoice.ai/docs/quick-start/porcupine-microcontroller/
+ - microWakeWord — https://github.com/kahrendt/microWakeWord (the streaming int8 runtime + training pipeline we're using)
  - Home Assistant ESP32-S3-BOX voice assistant (ESPHome/Wyoming) — reference for mic I2S configuration, display layouts, BSP usage. Do not adopt
  its Wyoming transport.
  - Willow (HeyWillow) — optional reference for AEC/VAD pipeline if we hit echo problems in v2.
@@ -207,19 +207,19 @@ HavenCore Satellite — ESP32-S3-BOX-3 MVP Spec
 
  Wake word integration
 
- Two-stage rollout:
+ Rollout landed in two stages:
 
- v0 (ship first, unblocks everything):
- - Touch-to-talk: capacitive button press OR tap anywhere on the LVGL idle screen starts LISTENING.
- - wake_word.c is a no-op stub.
+ v0 — touch-to-talk only:
+ - Capacitive button press OR tap anywhere on the LVGL idle screen starts LISTENING.
+ - wake_word.c was a no-op stub returning false.
 
- v1 (once Picovoice Console export for ESP32-S3-BOX-3 is in hand):
- - Add porcupine_esp32s3.a + hey_selene_esp32.ppn as components.
- - Dedicated FreeRTOS task tees audio from the I2S capture ring into Porcupine's 512-sample frames.
- - On keyword match, transition IDLE → LISTENING and discard the wake-word audio itself.
- - Expose an enable flag in config.c so the device still works if the model is missing or corrupt.
- - Do not reuse the existing Raspberry Pi .ppn; re-export from Picovoice Console with platform = ESP32-S3. The .ppn is platform-tagged and the
- runtime .a is Xtensa-specific.
+ v1 — microWakeWord "Hey Selene" (current):
+ - components/microwakeword/ hosts a clean-room runtime against the streaming int8 TFLite + micro_speech frontend contract.
+ - Model (hey_selene_v1.tflite) and manifest live in model/ and flash into a dedicated 1 MB SPIFFS partition ("model" @ 0xe00000).
+ - audio_feed_task downmixes stereo I2S to mono once and fans the mono stream into mww_feed_pcm + simple_vad + WAV capture.
+ - audio_detect_task polls mww_poll_detected() at 20 ms; wake_word_enabled() gates whether that triggers a LISTENING transition.
+ - Touch-to-talk still works regardless of model state — the manual path is independent.
+ - Retraining is out of tree (Python notebook against microWakeWord's pipeline); drop a new .tflite/.json into model/ to update.
 
  UI (LVGL)
 
@@ -247,7 +247,7 @@ HavenCore Satellite — ESP32-S3-BOX-3 MVP Spec
 
  - agent_base_url (default http://havencore.local)
  - voice (default af_heart)
- - wake_enabled (default false until Porcupine model present)
+ - wake_enabled (default true; set to 0 in NVS to force touch-to-talk only)
  - wifi_ssid / wifi_pass
 
  Error handling

@@ -1,7 +1,18 @@
 /*
  * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2026 HavenCore
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
+ *
+ * Audio pipeline wiring:
+ *
+ *   I2S (stereo 16 kHz) ─ downmix ─┬─▶ mww_feed_pcm()  (wake-word detector)
+ *                                  ├─▶ simple_vad_feed() (silence cutoff)
+ *                                  └─▶ audio_record_save() (WAV capture for STT)
+ *
+ * The external contract (sr_result_t queue, manul_detect_flag path,
+ * result state codes) matches the pre-migration ESP-SR code so
+ * app_audio.c:sr_handler_task keeps working unchanged.
  */
 
 #include <stdbool.h>
@@ -9,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
@@ -16,30 +28,23 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_spiffs.h"
+
 #include "app_sr.h"
-#include "esp_mn_speech_commands.h"
-#include "esp_process_sdkconfig.h"
-#include "esp_afe_sr_models.h"
-#include "esp_mn_models.h"
-#include "esp_wn_iface.h"
-#include "esp_wn_models.h"
-#include "esp_afe_sr_iface.h"
-#include "esp_mn_iface.h"
-#include "model_path.h"
 #include "bsp_board.h"
 #include "app_audio.h"
 #include "app_wifi.h"
 #include "wake_word.h"
+#include "simple_vad.h"
+#include "microwakeword.h"
 
 static const char *TAG = "app_sr";
 
-static esp_afe_sr_iface_t *afe_handle = NULL;
-static srmodel_list_t *models = NULL;
-static bool manul_detect_flag = false;
-
-sr_data_t *g_sr_data = NULL;
-
 #define I2S_CHANNEL_NUM      2
+/* I2S read chunk: 20 ms mono at 16 kHz = 320 samples = 640 bytes mono.
+ * With 2-channel I2S capture we read 1280 bytes per tick. */
+#define CHUNK_SAMPLES        320
 
 /* Hard cap on how long we stay in LISTENING before force-ending the turn.
  * VAD silence normally ends things at ~1.2 s — but a continuously noisy
@@ -47,58 +52,97 @@ sr_data_t *g_sr_data = NULL;
  * the LISTENING panel with the mic open. Plan.md specifies 15 s. */
 #define LISTEN_MAX_US        (15LL * 1000LL * 1000LL)
 
+/* Consecutive 20 ms silence frames before cutoff. 60 * 20 ms = 1.2 s,
+ * matches the behaviour we had with AFE VAD + frame_keep=100. */
+#define SILENCE_FRAMES_CUTOFF 60
+
+#define MODEL_MOUNT_POINT    "/srmodel"
+#define MODEL_TFLITE_PATH    MODEL_MOUNT_POINT "/hey_selene_v1.tflite"
+#define MODEL_JSON_PATH      MODEL_MOUNT_POINT "/hey_selene_v1.json"
+
+static bool manul_detect_flag = false;
+sr_data_t *g_sr_data = NULL;
+
 extern bool record_flag;
 extern uint32_t record_total_len;
 
+static esp_err_t mount_model_spiffs(void)
+{
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path      = MODEL_MOUNT_POINT,
+        .partition_label = "model",
+        .max_files      = 4,
+        .format_if_mount_failed = false,
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        /* already mounted — fine */
+        return ESP_OK;
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "mount model partition failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
+}
+
+/* Feed task: runs on core 0. Pulls I2S stereo, downmixes left-channel to
+ * mono, fans it out to the wake-word detector, the VAD, and the record
+ * buffer. */
 static void audio_feed_task(void *arg)
 {
-    ESP_LOGI(TAG, "Feed Task");
-    size_t bytes_read = 0;
-    esp_afe_sr_data_t *afe_data = (esp_afe_sr_data_t *) arg;
-    int audio_chunksize = afe_handle->get_feed_chunksize(afe_data);
-    int feed_channel = 3;
-    ESP_LOGI(TAG, "audio_chunksize=%d, feed_channel=%d", audio_chunksize, feed_channel);
+    (void)arg;
+    ESP_LOGI(TAG, "Feed Task: %d-sample chunks, mono 16 kHz", CHUNK_SAMPLES);
 
-    /* Allocate audio buffer and check for result */
-    int16_t *audio_buffer = heap_caps_malloc(audio_chunksize * sizeof(int16_t) * feed_channel, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    assert(audio_buffer);
-    g_sr_data->afe_in_buffer = audio_buffer;
+    const size_t stereo_bytes = CHUNK_SAMPLES * I2S_CHANNEL_NUM * sizeof(int16_t);
+    int16_t *stereo = heap_caps_malloc(stereo_bytes,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    int16_t *mono   = heap_caps_malloc(CHUNK_SAMPLES * sizeof(int16_t),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    assert(stereo && mono);
 
     while (true) {
         if (g_sr_data->event_group && xEventGroupGetBits(g_sr_data->event_group)) {
             xEventGroupSetBits(g_sr_data->event_group, FEED_DELETED);
+            heap_caps_free(stereo);
+            heap_caps_free(mono);
             vTaskDelete(NULL);
         }
 
-        /* Read audio data from I2S bus */
-        bsp_i2s_read((char *)audio_buffer, audio_chunksize * I2S_CHANNEL_NUM * sizeof(int16_t), &bytes_read, portMAX_DELAY);
+        size_t bytes_read = 0;
+        bsp_i2s_read((char *)stereo, stereo_bytes, &bytes_read, portMAX_DELAY);
+        if (bytes_read < stereo_bytes) continue;
 
-        /* Channel Adjust */
-        for (int  i = audio_chunksize - 1; i >= 0; i--) {
-            audio_buffer[i * 3 + 2] = 0;
-            audio_buffer[i * 3 + 1] = audio_buffer[i * 2 + 1];
-            audio_buffer[i * 3 + 0] = audio_buffer[i * 2 + 0];
+        /* Stereo → mono. On BOX-3 both ES7210 channels carry the same
+         * room mic content (confirmed with per-channel RMS logging); we
+         * take the right slot as the canonical mono. */
+        for (int i = 0; i < CHUNK_SAMPLES; ++i) {
+            mono[i] = stereo[i * 2 + 1];
         }
 
-        /* Checking if WIFI is connected */
-        if (WIFI_STATUS_CONNECTED_OK == wifi_connected_already()) {
+        /* Always feed the wake-word detector (cheap; the poll side is
+         * gated by wake_word_enabled). Skipping it while listening would
+         * tear the streaming-model hidden state. */
+        mww_feed_pcm(mono, CHUNK_SAMPLES);
 
-            /* Feed samples of an audio stream to the AFE_SR */
-            afe_handle->feed(afe_data, audio_buffer);
-        }
-        audio_record_save(audio_buffer, audio_chunksize);
+        /* VAD only matters during a listen window, but feeding it always
+         * lets the noise floor adapt. */
+        simple_vad_feed(mono, CHUNK_SAMPLES);
+
+        /* WAV capture for STT upload. */
+        audio_record_save(mono, CHUNK_SAMPLES);
     }
 }
 
+/* Detect task: runs on core 1. Emits sr_result_t events. */
 static void audio_detect_task(void *arg)
 {
+    (void)arg;
     ESP_LOGI(TAG, "Detection task");
-    static afe_vad_state_t local_state;
-    static uint8_t frame_keep = 0;
 
-    bool detect_flag = false;
+    bool    detect_flag    = false;
     int64_t detect_start_us = 0;
-    esp_afe_sr_data_t *afe_data = arg;
+    int     silence_frames = 0;
+    bool    seen_speech    = false;
 
     while (true) {
         if (NEED_DELETE && xEventGroupGetBits(g_sr_data->event_group)) {
@@ -106,47 +150,56 @@ static void audio_detect_task(void *arg)
             vTaskDelete(g_sr_data->handle_task);
             vTaskDelete(NULL);
         }
-        afe_fetch_result_t *res = afe_handle->fetch(afe_data);
-        if (!res || res->ret_value == ESP_FAIL) {
-            continue;
+
+        /* Either trigger enters LISTENING. Wake-word path is gated by
+         * wake_word_enabled() exactly as before. */
+        bool triggered = false;
+
+        if (wake_word_enabled() && mww_poll_detected()) {
+            ESP_LOGI(TAG, "wake word fired");
+            triggered = true;
         }
-        if (res->wakeup_state == WAKENET_DETECTED && wake_word_enabled()) {
-            ESP_LOGI(TAG,  "wakeword detected");
+        if (manul_detect_flag) {
+            manul_detect_flag = false;
+            triggered = true;
+        }
+
+        if (triggered && !detect_flag) {
             sr_result_t result = {
                 .wakenet_mode = WAKENET_DETECTED,
-                .state = ESP_MN_STATE_DETECTING,
-                .command_id = 0,
+                .state        = ESP_MN_STATE_DETECTING,
+                .command_id   = 0,
             };
             xQueueSend(g_sr_data->result_que, &result, 0);
-        } else if (res->wakeup_state == WAKENET_CHANNEL_VERIFIED || manul_detect_flag) {
-            if (!detect_flag) {
-                detect_start_us = esp_timer_get_time();
-            }
-            detect_flag = true;
-            if (manul_detect_flag) {
-                manul_detect_flag = false;
-                sr_result_t result = {
-                    .wakenet_mode = WAKENET_DETECTED,
-                    .state = ESP_MN_STATE_DETECTING,
-                    .command_id = 0,
-                };
-                xQueueSend(g_sr_data->result_que, &result, 0);
-            }
-            frame_keep = 0;
-            g_sr_data->afe_handle->disable_wakenet(afe_data);
-            ESP_LOGI(TAG,  "AFE_FETCH_CHANNEL_VERIFIED, channel index: %d\n", res->trigger_channel_id);
+            detect_flag    = true;
+            detect_start_us = esp_timer_get_time();
+            silence_frames  = 0;
+            seen_speech     = false;
+            /* Freeze the noise floor at whatever idle-room value it just
+             * settled to — inter-word silences during speech would
+             * otherwise inflate it and swallow the rest of the utterance. */
+            simple_vad_set_floor_locked(true);
         }
 
-        if (true == detect_flag) {
-
-            if (local_state != res->vad_state) {
-                local_state = res->vad_state;
-                frame_keep = 0;
-            } else {
-                frame_keep++;
+        /* Listen-window endpointing. Poll the VAD at its own 20 ms
+         * frame cadence (it updates state only when a full frame has
+         * been accumulated). Two rules:
+         *   - Don't start the silence timer until we've observed at
+         *     least one SPEECH frame — otherwise a slightly-late talker
+         *     gets cut off before they start.
+         *   - After that, SILENCE_FRAMES_CUTOFF consecutive silence
+         *     frames (1.2 s) end the turn.
+         * Wall-clock cap (LISTEN_MAX_US, 15 s) always applies. */
+        if (detect_flag) {
+            simple_vad_state_t vs = simple_vad_state();
+            if (vs == SIMPLE_VAD_SPEECH) {
+                seen_speech = true;
+                silence_frames = 0;
+            } else if (seen_speech) {
+                silence_frames++;
             }
 
-            bool silence_cutoff = (100 == frame_keep) && (AFE_VAD_SILENCE == res->vad_state);
+            bool silence_cutoff  = (silence_frames >= SILENCE_FRAMES_CUTOFF);
             bool wallclock_cutoff = (esp_timer_get_time() - detect_start_us) > LISTEN_MAX_US;
 
             if (silence_cutoff || wallclock_cutoff) {
@@ -156,81 +209,68 @@ static void audio_detect_task(void *arg)
                 }
                 sr_result_t result = {
                     .wakenet_mode = WAKENET_NO_DETECT,
-                    .state = ESP_MN_STATE_TIMEOUT,
-                    .command_id = 0,
+                    .state        = ESP_MN_STATE_TIMEOUT,
+                    .command_id   = 0,
                 };
                 xQueueSend(g_sr_data->result_que, &result, 0);
-                g_sr_data->afe_handle->enable_wakenet(afe_data);
                 detect_flag = false;
-                continue;
+                silence_frames = 0;
+                /* Let the noise floor adapt again during idle. */
+                simple_vad_set_floor_locked(false);
             }
         }
-    }
-    /* Task never returns */
-    vTaskDelete(NULL);
-}
 
-esp_err_t app_sr_set_language(sr_language_t new_lang)
-{
-    ESP_RETURN_ON_FALSE(NULL != g_sr_data, ESP_ERR_INVALID_STATE, TAG, "SR is not running");
-
-    if (new_lang == g_sr_data->lang) {
-        ESP_LOGW(TAG, "nothing to do");
-        return ESP_OK;
-    } else {
-        g_sr_data->lang = new_lang;
+        /* Poll cadence matches the VAD's 20 ms frame update so
+         * silence_frames counts once per new frame. */
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
-    ESP_LOGI(TAG, "Set language %s", SR_LANG_EN == g_sr_data->lang ? "EN" : "CN");
-    if (g_sr_data->model_data) {
-        g_sr_data->multinet->destroy(g_sr_data->model_data);
-    }
-    char *wn_name = esp_srmodel_filter(models, ESP_WN_PREFIX, "");
-    ESP_LOGI(TAG, "load wakenet:%s", wn_name);
-    g_sr_data->afe_handle->set_wakenet(g_sr_data->afe_data, wn_name);
-    return ESP_OK;
 }
 
 esp_err_t app_sr_start(bool record_en)
 {
-    esp_err_t ret = ESP_OK;
+    (void)record_en;
     ESP_RETURN_ON_FALSE(NULL == g_sr_data, ESP_ERR_INVALID_STATE, TAG, "SR already running");
 
     g_sr_data = heap_caps_calloc(1, sizeof(sr_data_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_RETURN_ON_FALSE(NULL != g_sr_data, ESP_ERR_NO_MEM, TAG, "Failed create sr data");
 
+    esp_err_t ret = ESP_OK;
+
     g_sr_data->result_que = xQueueCreate(3, sizeof(sr_result_t));
-    ESP_GOTO_ON_FALSE(NULL != g_sr_data->result_que, ESP_ERR_NO_MEM, err, TAG, "Failed create result queue");
+    ESP_GOTO_ON_FALSE(NULL != g_sr_data->result_que, ESP_ERR_NO_MEM, err, TAG, "result_que");
 
     g_sr_data->event_group = xEventGroupCreate();
-    ESP_GOTO_ON_FALSE(NULL != g_sr_data->event_group, ESP_ERR_NO_MEM, err, TAG, "Failed create event_group");
+    ESP_GOTO_ON_FALSE(NULL != g_sr_data->event_group, ESP_ERR_NO_MEM, err, TAG, "event_group");
 
-    BaseType_t ret_val;
-    models = esp_srmodel_init("model");
-    afe_handle = (esp_afe_sr_iface_t *)&ESP_AFE_SR_HANDLE;
-    afe_config_t afe_config = AFE_CONFIG_DEFAULT();
+    ret = mount_model_spiffs();
+    if (ret != ESP_OK) goto err;
 
-    afe_config.wakenet_model_name = esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
-    afe_config.aec_init = false;
+    /* Initialise the wake-word detector. Failure here shouldn't keep
+     * touch-to-talk from working, so we log and continue. */
+    ret = mww_init(MODEL_TFLITE_PATH, MODEL_JSON_PATH);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "microwakeword disabled (%s); touch-to-talk still active",
+                 esp_err_to_name(ret));
+        /* Force the wake gate off so audio_detect_task won't poll. */
+        wake_word_set_enabled(false);
+        ret = ESP_OK;
+    }
 
-    esp_afe_sr_data_t *afe_data = afe_handle->create_from_config(&afe_config);
-    g_sr_data->afe_handle = afe_handle;
-    g_sr_data->afe_data = afe_data;
+    simple_vad_reset();
 
-    g_sr_data->lang = SR_LANG_MAX;
-    ret = app_sr_set_language(SR_LANG_EN);
-    ESP_GOTO_ON_FALSE(ESP_OK == ret, ESP_FAIL, err, TAG,  "Failed to set language");
+    BaseType_t ok = xTaskCreatePinnedToCore(&audio_feed_task, "Feed Task",
+        6 * 1024, NULL, 5, &g_sr_data->feed_task, 0);
+    ESP_GOTO_ON_FALSE(pdPASS == ok, ESP_FAIL, err, TAG, "feed task");
 
-    ret_val = xTaskCreatePinnedToCore(&audio_feed_task, "Feed Task", 8 * 1024, (void *)afe_data, 5, &g_sr_data->feed_task, 0);
-    ESP_GOTO_ON_FALSE(pdPASS == ret_val, ESP_FAIL, err, TAG,  "Failed create audio feed task");
+    ok = xTaskCreatePinnedToCore(&audio_detect_task, "Detect Task",
+        6 * 1024, NULL, 5, &g_sr_data->detect_task, 1);
+    ESP_GOTO_ON_FALSE(pdPASS == ok, ESP_FAIL, err, TAG, "detect task");
 
-    ret_val = xTaskCreatePinnedToCore(&audio_detect_task, "Detect Task", 10 * 1024, (void *)afe_data, 5, &g_sr_data->detect_task, 1);
-    ESP_GOTO_ON_FALSE(pdPASS == ret_val, ESP_FAIL, err, TAG,  "Failed create audio detect task");
-
-    ret_val = xTaskCreatePinnedToCore(&sr_handler_task, "SR Handler Task", 8 * 1024, NULL, 5, &g_sr_data->handle_task, 0);
-    ESP_GOTO_ON_FALSE(pdPASS == ret_val, ESP_FAIL, err, TAG,  "Failed create audio handler task");
+    ok = xTaskCreatePinnedToCore(&sr_handler_task, "SR Handler Task",
+        8 * 1024, NULL, 5, &g_sr_data->handle_task, 0);
+    ESP_GOTO_ON_FALSE(pdPASS == ok, ESP_FAIL, err, TAG, "handler task");
 
     audio_record_init();
-
     return ESP_OK;
 err:
     app_sr_stop();
@@ -241,39 +281,14 @@ esp_err_t app_sr_stop(void)
 {
     ESP_RETURN_ON_FALSE(NULL != g_sr_data, ESP_ERR_INVALID_STATE, TAG, "SR is not running");
     xEventGroupSetBits(g_sr_data->event_group, NEED_DELETE);
-    xEventGroupWaitBits(g_sr_data->event_group, NEED_DELETE | FEED_DELETED | DETECT_DELETED | HANDLE_DELETED, 1, 1, portMAX_DELAY);
+    xEventGroupWaitBits(g_sr_data->event_group,
+        NEED_DELETE | FEED_DELETED | DETECT_DELETED | HANDLE_DELETED,
+        1, 1, portMAX_DELAY);
 
-    if (g_sr_data->result_que) {
-        vQueueDelete(g_sr_data->result_que);
-        g_sr_data->result_que = NULL;
-    }
+    if (g_sr_data->result_que)  { vQueueDelete(g_sr_data->result_que);  g_sr_data->result_que = NULL; }
+    if (g_sr_data->event_group) { vEventGroupDelete(g_sr_data->event_group); g_sr_data->event_group = NULL; }
 
-    if (g_sr_data->event_group) {
-        vEventGroupDelete(g_sr_data->event_group);
-        g_sr_data->event_group = NULL;
-    }
-
-    if (g_sr_data->fp) {
-        fclose(g_sr_data->fp);
-        g_sr_data->fp = NULL;
-    }
-
-    if (g_sr_data->model_data) {
-        g_sr_data->multinet->destroy(g_sr_data->model_data);
-    }
-
-    if (g_sr_data->afe_data) {
-        g_sr_data->afe_handle->destroy(g_sr_data->afe_data);
-    }
-
-    if (g_sr_data->afe_in_buffer) {
-        heap_caps_free(g_sr_data->afe_in_buffer);
-    }
-
-    if (g_sr_data->afe_out_buffer) {
-        heap_caps_free(g_sr_data->afe_out_buffer);
-    }
-
+    mww_deinit();
     heap_caps_free(g_sr_data);
     g_sr_data = NULL;
     return ESP_OK;

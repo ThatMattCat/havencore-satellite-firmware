@@ -1,0 +1,3 @@
+## microWakeWord runtime — local component.
+dependencies:
+  espressif/esp-tflite-micro: "^1.3.3"

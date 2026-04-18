@@ -2,33 +2,53 @@
 
 Tracks known issues, deferred work, and planned improvements. The authoritative spec remains [`../plan.md`](../plan.md); this document captures what's left on top of what's already built.
 
-## Current status (2026-04-15)
+## Current status (2026-04-18)
 
-First successful flash + boot. Device reaches READY and runs its health checks against the HavenCore host. Pipeline itself is untested — blocked on server reachability.
+Device #1 running the microWakeWord-migration branch against
+`http://selene.renman.wtf`. Full turn round-trip (tap → STT → chat → TTS)
+has been exercised. Device #2 provisioned today via the `esptool` NVS
+workaround (see `docs/PROVISIONING.md`).
 
-What's working (observed on-device):
+What's working:
 - Boot, PSRAM init, LVGL start, GT911 touch init (BSP patch applied).
-- Wi-Fi connects to `Renman` → DHCP `10.0.0.147`.
+- Wi-Fi + DHCP + three boot health probes (`/api/status`, `/api/stt/health`,
+  `/api/tts/health`) all return 200 against `selene.renman.wtf`.
 - NVS reads `ssid / password / Base_url / voice / wake_enabled`.
-- `build_url()` strips trailing `/v1/` from the stored base URL and logs a one-shot warning (as designed).
-- ESP-SR AFE + wakenet load; feed/detect tasks running; wake-word gated off via `wake_enabled=0`.
+- `build_url()` strips a trailing `/v1/` (one-shot warning) — keep it out of
+  NVS to avoid the noise.
+- microWakeWord loaded from the `model` SPIFFS partition. Feed task
+  downmixes stereo I2S to mono and fans out to `mww_feed_pcm` +
+  `simple_vad_feed` + WAV capture. Touch-to-talk and (when the override is
+  reverted) NVS-gated "Hey Selene" share the same listen flow.
+- Partition layout rebalanced for the migration — old `ota_0` 2 MB
+  overflow is no longer a blocker.
 
-What's blocked:
-- All three health checks return HTTP 502 against `http://ai.renman.wtf` (old host). The HavenCore agent has moved to `selene.renman.wtf` and is now fronted by nginx. Current NVS still points at the old URL.
-- Firmware has **no TLS** — `esp-tls` / cert bundle is not enabled. Server side must expose plain HTTP for the satellite, or we add TLS (deferred item below) before resuming.
-
-Resume checklist (next session):
-1. Confirm `http://selene.renman.wtf/api/status` returns 200 from the dev box.
-2. Erase NVS and reprovision via UF2:
-   ```
-   idf.py -p /dev/ttyACM0 erase-region 0x9000 0x4000
-   ```
-   Reset; the device boots into the UF2 factory partition and mounts as USB mass-storage. Write `Base_url=http://selene.renman.wtf` (no `/v1/` suffix — the client appends it), plus SSID / password.
-3. Reset back into the app; watch the monitor for `health /api/status -> HTTP 200`.
-4. Tap the screen and speak a short phrase; expect STT → chat → TTS round-trip with audible reply.
-5. Walk through `plan.md` §Verification Plan items 1–6 (see below).
+What's shaky:
+- `wake_word_enabled()` is hardcoded to `true` (see note below).
+- No TLS in firmware. Server must stay on plain HTTP for the satellite, or
+  we add the `mbedtls` bundle (deferred below).
+- UF2 factory-reset flow is broken — fresh devices need the `esptool`
+  provisioning path.
 
 ## Known issues
+
+### UF2 factory-reset flow broken (2026-04-18)
+
+`settings_factory_reset()` does `esp_ota_set_boot_partition(ota_0)` +
+restart, but the device comes back into the main `factory` app instead of
+TinyUF2 mass-storage. Also, fresh BOX-3 units ship with `chatgpt_demo`
+placeholder NVS values (`My Network SSID` / `10.0.0.134/v1/`), so the
+"missing keys" branch of `settings_read_parameter_from_nvs()` doesn't fire
+in the first place — the device loops on Wi-Fi retry until you overwrite
+NVS manually.
+
+Workaround: provision via `esptool` — see [`PROVISIONING.md`](PROVISIONING.md).
+Root cause is probably one of (a) `ota_0` doesn't actually contain the
+TinyUF2 factory app on these devices, (b) `esp_ota_set_boot_partition`
+succeeds but the bootloader falls back to `factory` because `ota_0`'s
+image header is invalid, or (c) the factory_nvs sub-project needs a
+rebuild + separate `write_flash 0x700000` pass. Worth confirming the next
+time we touch the factory_nvs sub-project.
 
 ### BSP touch init patch (`managed_components/` is gitignored)
 
@@ -51,9 +71,29 @@ Item 7 (wake-word) and item 8 (24 h soak) are deferred.
 
 Each of these is intentionally out of scope today. Notes below describe the planned shape when we come back to them.
 
-### Wake-word (Porcupine)
+### Wake-word (microWakeWord)
 
-`wake_word.{h,c}` is currently a runtime gate stub returning `false`. Plan: integrate Picovoice Porcupine's ESP32-S3 export once we have the `.ppn` keyword file and the Xtensa static lib. Wire it so `wake_word_enabled()` checks both NVS (`wake_enabled`) and Porcupine init success. The ESP-SR AFE pipeline already runs and already supplies VAD endpointing, so the wake-word integration only needs to replace the `res->wakeup_state == WAKENET_DETECTED` branch in `audio_detect_task`.
+Now integrated in-tree: `components/microwakeword/` hosts a clean-room
+implementation of the microWakeWord streaming runtime (int8 TFLite +
+micro_speech frontend), fed 16 kHz mono PCM from `audio_feed_task`. The
+"Hey Selene" model + manifest live in `model/` and are flashed into a
+dedicated 1 MB SPIFFS partition (`model` @ 0xe00000). This replaces both
+the deferred-Porcupine plan *and* ESP-SR's wakenet/AFE; neither ships in
+the firmware anymore.
+
+**2026-04-18 — `wake_word_enabled()` override.** `main/app/wake_word.c`
+hardcodes `wake_word_enabled()` to `true` and ignores
+`wake_word_set_enabled()`. Why: deployed devices still have NVS
+`wake_enabled=0` from the old default, and the UF2 factory-reset flow
+(see Known Issues) can't currently flip the key. Revert to the
+NVS-driven implementation (see git blame on `wake_word.c`) once UF2
+provisioning works again, or once we're confident every satellite has
+been re-provisioned via the `esptool` path.
+
+Tunables we still need to surface: `probability_cutoff`,
+`sliding_window_size`, `tensor_arena_size` come from the manifest JSON;
+the Python training pipeline owns those. Nothing to do on the firmware
+side unless we want to override per-device.
 
 ### Configurable 15 s cap / silence threshold
 
@@ -65,7 +105,12 @@ Neither constant is exposed via NVS yet. Add as optional keys when the defaults 
 
 ### Barge-in / AEC
 
-Plan.md explicitly excludes this from MVP. `afe_config.aec_init = false` in `app_sr.c`. Enabling AEC means re-routing the TX buffer back into the AFE as the echo reference — nontrivial, costs CPU, and the playback loudness on the BOX-3 speaker usually clips the mics anyway.
+Plan.md explicitly excludes this from MVP. ESP-SR's AFE (which provided an
+AEC hook) was removed in the microWakeWord migration, so there's no
+existing echo-cancel plumbing to enable — we'd need to bring AEC back in
+as a standalone component, re-routing the I2S TX buffer back into it as
+the echo reference. Nontrivial, costs CPU, and BOX-3 speaker loudness
+usually clips the mics anyway.
 
 ### SSE streaming of `/v1/chat/completions`
 
@@ -73,7 +118,7 @@ Today we wait for the full chat response before starting TTS (stream=false in th
 
 ### Multi-device identity (`X-Satellite-Id` header)
 
-Not needed with one device. When we have two satellites, add a device-id NVS key and stamp every request.
+Now that two BOX-3s are live against the same HavenCore host, they share a single server-side session pool — fine today because they're not in use simultaneously, but we should stamp a device-id NVS key onto every request before that changes.
 
 ### OTA updates
 
@@ -87,4 +132,4 @@ Trusted-LAN assumption is explicit in plan.md. Adds a mbedtls bundle (~80 KB) an
 
 - `plan.md` is the source of truth for intent; if we change direction, update it there first, then reflect in this doc.
 - When any deferred item above lands, move its section into the relevant commit message and delete it here.
-- Partition overflow is the only real blocker for Phase 6; everything else above is planned enhancement rather than broken behavior.
+- The only blocker for a clean first-time-install UX is the UF2 factory-reset flow. Until that's fixed, new devices need the `esptool` path in `docs/PROVISIONING.md`.

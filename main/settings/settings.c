@@ -73,10 +73,12 @@ esp_err_t settings_read_parameter_from_nvs(void)
         strlcpy(g_sys_param.voice, "af_heart", sizeof(g_sys_param.voice));
     }
 
-    // Read wake_enabled (optional; defaults to 0 / touch-to-talk only)
-    uint8_t wake = 0;
+    /* wake_enabled (optional). Default: on. Set to 0 in NVS via UF2
+     * factory mode to disable wake word on a deployed device (leaves
+     * touch-to-talk working). */
+    uint8_t wake = 1;
     if (nvs_get_u8(my_handle, "wake_enabled", &wake) != ESP_OK) {
-        wake = 0;
+        wake = 1;
     }
     g_sys_param.wake_enabled = wake;
 

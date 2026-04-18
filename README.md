@@ -6,7 +6,7 @@ Ported from Espressif's `esp-box/examples/chatgpt_demo` with the three OpenAI en
 
 ## Status
 
-MVP touch-to-talk path — STT → chat → TTS → playback — is functionally complete and builds cleanly. Not yet flashed to hardware. See [docs/ROADMAP.md](docs/ROADMAP.md) for what's next and known issues (notably the `ota_0` partition overflow that blocks flashing).
+MVP touch-to-talk path — STT → chat → TTS → playback — is running on hardware. Active work is the microWakeWord migration (on-device "Hey Selene" detection, replacing ESP-SR wakenet + Porcupine plan). See [docs/ROADMAP.md](docs/ROADMAP.md) for what's left and known issues.
 
 ## Repo layout
 
@@ -17,19 +17,23 @@ MVP touch-to-talk path — STT → chat → TTS → playback — is functionally
 ├── partitions.csv                  # flash layout (16 MB)
 ├── sdkconfig.defaults              # base Kconfig defaults
 ├── sdkconfig.ci.box-3              # BOX-3-specific overlay
+├── nvs_config.example.csv          # NVS template for provisioning
 ├── main/                           # app sources
 │   ├── main.c                      # app_main + turn orchestration
-│   ├── app/                        # audio, SR, UI, wifi, state, wake_word, debug_overlay
+│   ├── app/                        # audio, SR, UI, wifi, state, wake_word, simple_vad, debug_overlay
 │   ├── settings/                   # NVS wrapper (sys_param_t)
 │   └── ui/                         # SquareLine-generated LVGL screens
 ├── components/
 │   ├── bsp/                        # esp-box BSP selector wrapper
+│   ├── microwakeword/              # on-device "Hey Selene" (streaming int8 TFLite)
 │   └── havencore_client/           # HTTP client for /v1/* endpoints
-├── factory_nvs/                    # sub-project that builds factory_nvs.bin
+├── model/                          # microWakeWord model + manifest (*.tflite gitignored)
+├── factory_nvs/                    # sub-project that builds factory_nvs.bin (TinyUF2 fallback)
 ├── spiffs/                         # prompt/feedback audio assets
 ├── squareline/                     # SquareLine Studio project (regenerates ui/)
 └── docs/
     ├── ARCHITECTURE.md             # how the firmware is wired
+    ├── PROVISIONING.md             # NVS provisioning (esptool workaround path)
     └── ROADMAP.md                  # planned improvements, deferred work
 ```
 
@@ -61,15 +65,21 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ## Provisioning
 
-The seed ships a factory UF2 partition. On first boot (or whenever `ssid` / `password` / `Base_url` is missing from NVS), `settings_read_parameter_from_nvs()` switches the boot partition to the UF2 app, which exposes a mass-storage device for editing `configuration.nvs`. Required keys:
+Intended path: empty NVS → `settings_factory_reset()` flips boot to the
+TinyUF2 `ota_0` partition → BOX-3 mounts as USB mass-storage → edit
+`configuration.nvs`. That flow is currently broken — see
+[docs/PROVISIONING.md](docs/PROVISIONING.md) for the `esptool`/CSV
+workaround used to provision fresh devices today.
+
+Required keys:
 
 | Key           | Type    | Notes                                         |
 | ------------- | ------- | --------------------------------------------- |
 | `ssid`        | string  | target Wi-Fi SSID                             |
 | `password`    | string  | Wi-Fi PSK                                     |
-| `Base_url`    | string  | e.g. `http://havencore.local`                 |
+| `Base_url`    | string  | plain HTTP only; no `/v1/` suffix             |
 | `voice`       | string  | optional, defaults to `af_heart`              |
-| `wake_enabled`| u8      | optional, defaults to `0` (touch-to-talk only)|
+| `wake_enabled`| u8      | optional, defaults to `1` (wake word armed); set to `0` for touch-to-talk only |
 
 ## License
 
