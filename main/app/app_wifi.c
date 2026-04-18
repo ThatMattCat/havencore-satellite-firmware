@@ -151,7 +151,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        send_network_event(NET_EVENT_POWERON_SCAN);
+        esp_wifi_connect();
         ESP_LOGI(TAG, "start connect to the AP");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_reconnect && ++s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
@@ -213,6 +213,10 @@ static void wifi_init_sta(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    /* App owns its own NVS namespace for SSID/password; keep the driver's
+     * BSSID/PMK/channel cache in RAM so stale crypto state can't survive a
+     * reboot and race with a cold-start connect. */
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
@@ -267,12 +271,6 @@ static void network_task(void *args)
                 ESP_LOGI(TAG, "NET_EVENT_WEATHER");
                 break;
 
-            case NET_EVENT_POWERON_SCAN:
-                ESP_LOGI(TAG, "NET_EVENT_POWERON_SCAN");
-                wifi_scan();
-                esp_wifi_connect();
-                wifi_connected = false;
-                break;
             default:
                 break;
             }
