@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ESP-IDF v5.5 firmware for an ESP32-S3-BOX-3 voice satellite. Ported from Espressif's `esp-box/examples/chatgpt_demo`; the OpenAI endpoints are repointed at a self-hosted HavenCore agent on the LAN. MVP is touch-to-talk: tap → STT → chat → TTS → playback.
 
-`docs/ARCHITECTURE.md` describes how the firmware is currently wired; `docs/ROADMAP.md` tracks MVP verification state, known issues, and deferred work; `docs/PROVISIONING.md` covers the esptool NVS workaround for fresh devices. When changing direction, update ROADMAP first.
+`docs/ARCHITECTURE.md` describes how the firmware is currently wired; `docs/ROADMAP.md` tracks MVP verification state, known issues, and deferred work; `docs/PROVISIONING.md` covers the esptool NVS workaround for fresh devices; `docs/SETTINGS.md` is the NVS schema + recipe for adding a new setting (storage, UI row, HTTP plumbing). When changing direction, update ROADMAP first.
 
 ## Build & flash
 
@@ -52,8 +52,14 @@ HTTP client is `components/havencore_client/havencore_client.c` — three endpoi
 
 BSP (`components/bsp/`) is a thin selector between `espressif__esp-box`, `esp-box-3`, and `esp-box-lite` managed components keyed on `CONFIG_BSP_BOARD_ESP32_S3_BOX_*`. SquareLine Studio project lives in `squareline/` and regenerates `main/ui/`; four panels today (`ui_PanelSleep/Listen/Get/Reply`). Long-press on the active screen toggles the debug overlay (`main/app/debug_overlay.c`).
 
+**Hand-edits in SquareLine-generated files.** `main/ui/screens/ui_ScreenSettings.c`, `main/ui/ui.c`, and `main/ui/ui.h` contain manual edits for the Device Name editor (textarea + on-screen keyboard) and the removal of the dead Region Select dropdown. If you regenerate `main/ui/` from `squareline/chat_gpt.spj`, re-apply: (1) the `ui_PanelSettingsDeviceName` / `ui_TextareaSettingsDeviceName` / `ui_KeyboardSettings` block in `ui_ScreenSettings.c`, (2) the `ui_event_TextareaSettingsDeviceName` and `ui_event_KeyboardSettings` handlers in `ui.c`, (3) the back-button keyboard-hide lines, and (4) the matching externs in `ui.h`. Delete any regenerated Region widgets.
+
+Identity headers on every HavenCore request are stamped by `components/havencore_client/`:
+- `X-Session-Id: selene-<last-4-hex-of-MAC>` — derived from the Wi-Fi STA MAC at boot via `havencore_client_init_session_id()`.
+- `X-Device-Name: <settings.device_name>` — mirrored from NVS via `havencore_client_set_device_name()` (called at boot and when the user edits the name in Settings).
+
 ## Provisioning
 
-NVS keys read by `settings_read_parameter_from_nvs()`: `ssid`, `password`, `Base_url` (required), `voice` (defaults `af_heart`), `wake_enabled` (u8, default 1 — wake word armed if the key is absent; set to 0 to force touch-to-talk only). Missing required keys *should* trigger `settings_factory_reset()` → switch boot to `ota_0` (TinyUF2) → USB mass-storage drive for editing `configuration.nvs`.
+NVS keys read by `settings_read_parameter_from_nvs()`: `ssid`, `password`, `Base_url` (required), `voice` (defaults `af_heart`), `wake_enabled` (u8, default 1 — wake word armed if the key is absent; set to 0 to force touch-to-talk only), `device_name` (str, up to 31 chars, default `Satellite` — user-visible room label stamped onto the `X-Device-Name` header; editable in-app via the Settings screen, written back to NVS by `settings_set_device_name()`). Missing required keys *should* trigger `settings_factory_reset()` → switch boot to `ota_0` (TinyUF2) → USB mass-storage drive for editing `configuration.nvs`.
 
 The UF2 flow is currently broken (ROADMAP, 2026-04-18). Out-of-the-box devices also arrive with `chatgpt_demo` placeholder values in NVS (`My Network SSID` / `10.0.0.134/v1/`), so the fallback path never fires — the device just loops on Wi-Fi retry. **Provision fresh devices via `esptool` per `docs/PROVISIONING.md`** until UF2 is fixed.

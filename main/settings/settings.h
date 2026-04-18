@@ -13,6 +13,7 @@
 #define PASSWORD_SIZE 64
 #define URL_SIZE 64
 #define VOICE_SIZE 32
+#define DEVICE_NAME_SIZE 32
 
 typedef struct {
     char ssid[SSID_SIZE];             /* SSID of target AP. */
@@ -20,8 +21,10 @@ typedef struct {
     char url[URL_SIZE];               /* HavenCore agent base URL. */
     char voice[VOICE_SIZE];           /* TTS voice id. Defaults to "af_heart". */
     uint8_t wake_enabled;             /* 0 = touch-to-talk only, 1 = wake-word armed. */
+    char device_name[DEVICE_NAME_SIZE]; /* User-visible room label. Defaults to "Satellite". */
 } sys_param_t;
 
 esp_err_t settings_factory_reset(void);
 esp_err_t settings_read_parameter_from_nvs(void);
 sys_param_t *settings_get_parameter(void);
+esp_err_t settings_set_device_name(const char *name);

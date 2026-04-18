@@ -57,6 +57,21 @@ esp_err_t havencore_tts(const char *base_url,
  */
 esp_err_t havencore_get_ok(const char *base_url, const char *path);
 
+/*
+ * Derive a stable per-device identity from the Wi-Fi STA MAC and cache it for
+ * later use as the `X-Session-Id` header value (e.g. "selene-a4b2"). Must be
+ * called once after NVS/network init and before any havencore_* request.
+ * Safe to call multiple times; only the first call has effect.
+ */
+void havencore_client_init_session_id(void);
+
+/*
+ * Set the user-visible device name used as the `X-Device-Name` header value
+ * on subsequent requests. Safe to call repeatedly (e.g. when the user edits
+ * the name from Settings). Pass an empty string to suppress the header.
+ */
+void havencore_client_set_device_name(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

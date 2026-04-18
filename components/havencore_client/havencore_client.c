@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
+#include "esp_mac.h"
 #include "cJSON.h"
 
 static const char *TAG = "havencore";
@@ -15,6 +16,45 @@ static const char *TAG = "havencore";
 #define CHAT_PATH          "/v1/chat/completions"
 #define TTS_PATH           "/v1/audio/speech"
 #define HTTP_TIMEOUT_MS    30000
+
+/* Identity headers sent on every HavenCore request. s_session_id is a stable
+ * per-device value derived from the Wi-Fi MAC at boot; s_device_name is the
+ * user-visible room label mirrored from NVS (settings.device_name). */
+static char s_session_id[16] = {0};
+static char s_device_name[32] = {0};
+
+void havencore_client_init_session_id(void)
+{
+    if (s_session_id[0] != '\0') {
+        return;
+    }
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+        snprintf(s_session_id, sizeof(s_session_id), "selene-%02x%02x", mac[4], mac[5]);
+    } else {
+        strlcpy(s_session_id, "selene-unknown", sizeof(s_session_id));
+    }
+    ESP_LOGI(TAG, "session id: %s", s_session_id);
+}
+
+void havencore_client_set_device_name(const char *name)
+{
+    if (!name) {
+        s_device_name[0] = '\0';
+        return;
+    }
+    strlcpy(s_device_name, name, sizeof(s_device_name));
+}
+
+static void set_identity_headers(esp_http_client_handle_t client)
+{
+    if (s_session_id[0] != '\0') {
+        esp_http_client_set_header(client, "X-Session-Id", s_session_id);
+    }
+    if (s_device_name[0] != '\0') {
+        esp_http_client_set_header(client, "X-Device-Name", s_device_name);
+    }
+}
 
 /* Copy base_url into out, trimming trailing '/' and a trailing "/v1"
  * segment if present — NVS values like "http://host/v1/" are a common
@@ -137,6 +177,7 @@ esp_err_t havencore_stt(const char *base_url,
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { free(body); return ESP_FAIL; }
 
+    set_identity_headers(client);
     esp_http_client_set_header(client, "Content-Type",
         "multipart/form-data; boundary=" MULTIPART_BOUNDARY);
 
@@ -201,6 +242,7 @@ esp_err_t havencore_chat(const char *base_url,
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { free(body); return ESP_FAIL; }
 
+    set_identity_headers(client);
     esp_http_client_set_header(client, "Content-Type", "application/json");
     size_t body_len = strlen(body);
 
@@ -269,6 +311,7 @@ esp_err_t havencore_tts(const char *base_url,
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) { free(body); return ESP_FAIL; }
 
+    set_identity_headers(client);
     esp_http_client_set_header(client, "Content-Type", "application/json");
     size_t body_len = strlen(body);
 
@@ -302,6 +345,7 @@ esp_err_t havencore_get_ok(const char *base_url, const char *path)
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return ESP_FAIL;
 
+    set_identity_headers(client);
     esp_err_t ret = esp_http_client_perform(client);
     if (ret == ESP_OK) {
         int status = esp_http_client_get_status_code(client);

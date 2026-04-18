@@ -151,6 +151,9 @@ void app_main()
     ESP_ERROR_CHECK(settings_read_parameter_from_nvs());
     sys_param = settings_get_parameter();
 
+    havencore_client_init_session_id();
+    havencore_client_set_device_name(sys_param->device_name);
+
     bsp_spiffs_mount();
     bsp_i2c_init();
 

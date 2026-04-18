@@ -142,9 +142,9 @@ on touch or microWakeWord means the device never starts capture on its own.
 Flipping to always-on VAD would save the gesture/phrase but risks
 false-trigger spam — not worth it until the pipeline is rock-solid.
 
-### Multi-device identity (`X-Satellite-Id` header)
+### ~~Multi-device identity (`X-Satellite-Id` header)~~ — shipped 2026-04-18
 
-Now that two BOX-3s are live against the same HavenCore host, they share a single server-side session pool — fine today because they're not in use simultaneously, but we should stamp a device-id NVS key onto every request before that changes.
+Replaced by two headers stamped on every HavenCore request (see `components/havencore_client/havencore_client.c`): `X-Session-Id: selene-<mac-suffix>` (stable per-device, MAC-derived at boot) and `X-Device-Name` (user-entered room label, default `Satellite`, editable in the Settings screen and persisted in NVS as `device_name`).
 
 ### OTA updates
 

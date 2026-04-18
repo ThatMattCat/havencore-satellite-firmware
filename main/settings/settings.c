@@ -82,12 +82,20 @@ esp_err_t settings_read_parameter_from_nvs(void)
     }
     g_sys_param.wake_enabled = wake;
 
+    // Read device_name (optional; defaults to "Satellite" if absent)
+    len = sizeof(g_sys_param.device_name);
+    esp_err_t name_ret = nvs_get_str(my_handle, "device_name", g_sys_param.device_name, &len);
+    if (name_ret != ESP_OK || len == 0) {
+        strlcpy(g_sys_param.device_name, "Satellite", sizeof(g_sys_param.device_name));
+    }
+
     nvs_close(my_handle);
 
     ESP_LOGI(TAG, "stored ssid:%s", g_sys_param.ssid);
     ESP_LOGI(TAG, "stored password:%s", g_sys_param.password);
     ESP_LOGI(TAG, "stored Base URL:%s", g_sys_param.url);
-    ESP_LOGI(TAG, "voice:%s wake_enabled:%u", g_sys_param.voice, g_sys_param.wake_enabled);
+    ESP_LOGI(TAG, "voice:%s wake_enabled:%u device_name:%s",
+             g_sys_param.voice, g_sys_param.wake_enabled, g_sys_param.device_name);
     return ESP_OK;
 
 err:
@@ -101,4 +109,37 @@ err:
 sys_param_t *settings_get_parameter(void)
 {
     return &g_sys_param;
+}
+
+esp_err_t settings_set_device_name(const char *name)
+{
+    if (!name) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open_from_partition(uf2_nvs_partition, uf2_nvs_namespace,
+                                            NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs open (rw) failed: 0x%x", ret);
+        return ret;
+    }
+
+    ret = nvs_set_str(handle, "device_name", name);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str device_name failed: 0x%x", ret);
+        nvs_close(handle);
+        return ret;
+    }
+
+    ret = nvs_commit(handle);
+    nvs_close(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_commit failed: 0x%x", ret);
+        return ret;
+    }
+
+    strlcpy(g_sys_param.device_name, name, sizeof(g_sys_param.device_name));
+    ESP_LOGI(TAG, "device_name set to \"%s\"", g_sys_param.device_name);
+    return ESP_OK;
 }
