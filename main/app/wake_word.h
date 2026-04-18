@@ -12,9 +12,12 @@
 extern "C" {
 #endif
 
-/* Stub wake-word gate. Touch-to-talk is the only trigger in the MVP;
- * Porcupine integration lands in a separate commit once the Picovoice
- * ESP32-S3 export is in hand. Default: disabled. */
+/* Runtime gate for the microWakeWord ("Hey Selene") detector. When true,
+ * audio_detect_task will emit a LISTENING trigger on mww_poll_detected().
+ * Touch-to-talk is always available regardless of this flag. Stub starts
+ * false at boot and is flipped by main.c from the NVS `wake_enabled` key;
+ * that key defaults to 1 (armed) when absent, so the effective default
+ * on a normally-provisioned device is on. */
 bool wake_word_enabled(void);
 void wake_word_set_enabled(bool en);
 

@@ -2,8 +2,14 @@
 // SquareLine Studio version: SquareLine Studio 1.3.0
 // LVGL version: 8.3.4
 // Project name: chat_gpt
+//
+// Hand-edited: Region Select dropdown removed and replaced with a Device Name
+// textarea + shared on-screen keyboard. If the SquareLine project is
+// regenerated, re-apply the Device Name block and delete the Region block.
+// See CLAUDE.md "Architecture in one pass" for details.
 
 #include "../ui.h"
+#include "settings.h"
 
 void ui_ScreenSettings_screen_init(void)
 {
@@ -94,57 +100,49 @@ void ui_ScreenSettings_screen_init(void)
     lv_obj_set_style_bg_grad_dir(ui_SettingsSettingsSplitBarRight, LV_GRAD_DIR_HOR, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(ui_SettingsSettingsSplitBarRight, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    ui_PanelSettingsRegion = lv_obj_create(ui_PanelSettings);
-    lv_obj_set_width(ui_PanelSettingsRegion, lv_pct(100));
-    lv_obj_set_height(ui_PanelSettingsRegion, lv_pct(19));
-    lv_obj_set_align(ui_PanelSettingsRegion, LV_ALIGN_BOTTOM_MID);
-    lv_obj_set_flex_flow(ui_PanelSettingsRegion, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(ui_PanelSettingsRegion, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(ui_PanelSettingsRegion, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
-    lv_obj_set_style_radius(ui_PanelSettingsRegion, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(ui_PanelSettingsRegion, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_opa(ui_PanelSettingsRegion, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_width(ui_PanelSettingsRegion, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_left(ui_PanelSettingsRegion, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_right(ui_PanelSettingsRegion, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_top(ui_PanelSettingsRegion, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_bottom(ui_PanelSettingsRegion, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_row(ui_PanelSettingsRegion, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_column(ui_PanelSettingsRegion, 100, LV_PART_MAIN | LV_STATE_DEFAULT);
+    /* Hand-edit: Device Name row (replaces the removed Region Select). */
+    ui_PanelSettingsDeviceName = lv_obj_create(ui_PanelSettings);
+    lv_obj_set_width(ui_PanelSettingsDeviceName, lv_pct(100));
+    lv_obj_set_height(ui_PanelSettingsDeviceName, lv_pct(19));
+    lv_obj_set_align(ui_PanelSettingsDeviceName, LV_ALIGN_BOTTOM_MID);
+    lv_obj_set_flex_flow(ui_PanelSettingsDeviceName, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ui_PanelSettingsDeviceName, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(ui_PanelSettingsDeviceName, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(ui_PanelSettingsDeviceName, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_PanelSettingsDeviceName, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_PanelSettingsDeviceName, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui_PanelSettingsDeviceName, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui_PanelSettingsDeviceName, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui_PanelSettingsDeviceName, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui_PanelSettingsDeviceName, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    lv_obj_set_style_border_width(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_outline_width(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_outline_pad(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_left(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_right(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_top(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_bottom(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_row(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_column(ui_PanelSettingsRegion, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
+    ui_LabelSettingsDeviceName = lv_label_create(ui_PanelSettingsDeviceName);
+    lv_obj_set_width(ui_LabelSettingsDeviceName, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsDeviceName, LV_SIZE_CONTENT);
+    lv_label_set_text(ui_LabelSettingsDeviceName, "Device Name");
+    lv_obj_set_style_text_color(ui_LabelSettingsDeviceName, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsDeviceName, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsDeviceName, &ui_font_PingFangEN16, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    ui_LabelSettingsRegion = lv_label_create(ui_PanelSettingsRegion);
-    lv_obj_set_width(ui_LabelSettingsRegion, LV_SIZE_CONTENT);   /// 1
-    lv_obj_set_height(ui_LabelSettingsRegion, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_align(ui_LabelSettingsRegion, LV_ALIGN_LEFT_MID);
-    lv_label_set_text(ui_LabelSettingsRegion, "Region Select");
-    lv_obj_set_style_text_color(ui_LabelSettingsRegion, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelSettingsRegion, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelSettingsRegion, &ui_font_PingFangEN16, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_TextareaSettingsDeviceName = lv_textarea_create(ui_PanelSettingsDeviceName);
+    lv_textarea_set_one_line(ui_TextareaSettingsDeviceName, true);
+    lv_textarea_set_max_length(ui_TextareaSettingsDeviceName, DEVICE_NAME_SIZE - 1);
+    lv_textarea_set_placeholder_text(ui_TextareaSettingsDeviceName, "Satellite");
+    lv_textarea_set_text(ui_TextareaSettingsDeviceName, settings_get_parameter()->device_name);
+    lv_obj_set_width(ui_TextareaSettingsDeviceName, lv_pct(55));
+    lv_obj_set_height(ui_TextareaSettingsDeviceName, LV_SIZE_CONTENT);
+    lv_obj_add_event_cb(ui_TextareaSettingsDeviceName, ui_event_TextareaSettingsDeviceName, LV_EVENT_ALL, NULL);
 
-    ui_DropdownSettingsRegion = lv_dropdown_create(ui_PanelSettingsRegion);
-    lv_dropdown_set_options(ui_DropdownSettingsRegion, "Espressif\nOpenAI");
-    lv_obj_set_width(ui_DropdownSettingsRegion, lv_pct(33));
-    lv_obj_set_height(ui_DropdownSettingsRegion, lv_pct(100));
-    lv_obj_set_x(ui_DropdownSettingsRegion, 2);
-    lv_obj_set_y(ui_DropdownSettingsRegion, -9);
-    lv_obj_set_align(ui_DropdownSettingsRegion, LV_ALIGN_BOTTOM_RIGHT);
-    lv_obj_add_flag(ui_DropdownSettingsRegion, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
-    lv_obj_set_style_outline_width(ui_DropdownSettingsRegion, 0, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_pad(ui_DropdownSettingsRegion, 0, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_width(ui_DropdownSettingsRegion, 0, LV_STATE_FOCUS_KEY);
-    lv_obj_set_style_outline_pad(ui_DropdownSettingsRegion, 0, LV_STATE_FOCUS_KEY);
-
-    lv_obj_set_style_text_align(ui_DropdownSettingsRegion, LV_TEXT_ALIGN_CENTER, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    /* Shared on-screen keyboard. Parented to the screen (not the row panel)
+     * so it can span the full width and float above other widgets. Hidden
+     * until the textarea is focused. */
+    ui_KeyboardSettings = lv_keyboard_create(ui_ScreenSettings);
+    lv_obj_set_width(ui_KeyboardSettings, lv_pct(100));
+    lv_obj_set_height(ui_KeyboardSettings, lv_pct(50));
+    lv_obj_align(ui_KeyboardSettings, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_flag(ui_KeyboardSettings, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(ui_KeyboardSettings, ui_event_KeyboardSettings, LV_EVENT_ALL, NULL);
 
     ui_ImageSettingsBack = lv_img_create(ui_ScreenSettings);
     lv_img_set_src(ui_ImageSettingsBack, &ui_img_settings_back_png);
@@ -176,7 +174,6 @@ void ui_ScreenSettings_screen_init(void)
     lv_obj_set_style_border_width(ui_ImageSettingsReset, 5, LV_PART_MAIN | LV_STATE_FOCUSED);
 
 
-    lv_obj_add_event_cb(ui_DropdownSettingsRegion, ui_event_DropdownSettingsRegion, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_ImageSettingsBack, ui_event_ImageSettingsBack, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_ImageSettingsReset, ui_event_ImageSettingsReset, LV_EVENT_ALL, NULL);
 }

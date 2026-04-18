@@ -2,23 +2,23 @@ menu "Example Configuration"
 
     config ESP_WIFI_SSID
         string "WiFi SSID"
-        default "My Network SSID"
+        default ""
         help
-            SSID (network name) for the example to connect to.
+            Default SSID written to NVS on first UF2 boot when the key is
+            missing. Leave empty — the main app's settings check treats
+            empty strings as missing and will re-enter UF2, giving the
+            user another chance to set it via CONFIG.INI.
     config ESP_WIFI_PASSWORD
         string "WiFi Password"
-        default "My Password"
+        default ""
         help
-            WiFi password (WPA or WPA2) for the example to use.
-    config OPENAI_API_KEY
-        string "OpenAI Key"
-        default "sk-xxxxxxxx"
+            Default Wi-Fi PSK written to NVS on first UF2 boot when the
+            key is missing. Keep empty; see ESP_WIFI_SSID.
+    config HAVENCORE_BASE_URL
+        string "HavenCore Base URL"
+        default ""
         help
-            OpenAI api key for the example to use.
-    config OPENAI_URL
-        string "Base URL"
-        default "https://api.openai.com/v1/"
-        help
-            Base URL for OpenAI API
+            Default HavenCore agent base URL (e.g. http://selene.example).
+            Keep empty; see ESP_WIFI_SSID.
 
 endmenu

@@ -16,7 +16,7 @@
 
 #define CODEC_DEFAULT_SAMPLE_RATE          (16000)
 #define CODEC_DEFAULT_BIT_WIDTH            (16)
-#define CODEC_DEFAULT_ADC_VOLUME           (24.0)
+#define CODEC_DEFAULT_ADC_VOLUME           (33.0)
 #define CODEC_DEFAULT_CHANNEL              (2)
 
 static const pmod_pins_t g_pmod[2] = {

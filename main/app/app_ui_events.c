@@ -7,7 +7,7 @@
 
 #include "ui.h"
 #include "app_ui_ctrl.h"
-#include "esp_ota_ops.h"
+#include "settings.h"
 #include "esp_system.h"
 #include "esp_log.h"
 
@@ -26,23 +26,27 @@ void EventPanelSleepClickCb(lv_event_t *e)
     ESP_LOGI(TAG, "sr start once");
 }
 
-static void RestartToFactoryPartition(void)
+static void trigger_factory_reset(const char *source)
 {
-    const esp_partition_t *update_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
-    // Set the boot partition to switch to Project 1 using OTA handle
-    ESP_LOGI(TAG, "Switch to partition UF2");
-    esp_ota_set_boot_partition(update_partition);
-    esp_restart();
+    ESP_LOGI(TAG, "Factory reset requested from %s", source);
+    esp_err_t err = settings_factory_reset();
+    /* settings_factory_reset() restarts on success, so anything that
+     * returns here is a failure — ota_0 is blank/corrupt and the UF2
+     * recovery app cannot run. Surface it on-screen rather than letting
+     * the UI sit frozen. */
+    ESP_LOGE(TAG, "factory reset failed: %s", esp_err_to_name(err));
+    ui_ctrl_show_fatal_error(
+        "UF2 recovery image missing.\n"
+        "Run scripts/bootstrap_ota0.sh on\n"
+        "the host, then retry.");
 }
 
 void EventWifiResetConfirmClick(lv_event_t *e)
 {
-    ESP_LOGI(TAG, "Reboot from WIFI Page to Factory Partition");
-    RestartToFactoryPartition();
+    trigger_factory_reset("WIFI reset page");
 }
 
 void EventResetConfirm(lv_event_t *e)
 {
-    ESP_LOGI(TAG, "Reboot from Settings Page to Factory Partition");
-    RestartToFactoryPartition();
+    trigger_factory_reset("Settings page");
 }

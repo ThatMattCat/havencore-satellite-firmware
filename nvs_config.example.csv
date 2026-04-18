@@ -4,4 +4,4 @@ ssid,data,string,YOUR_WIFI_SSID
 password,data,string,YOUR_WIFI_PASSWORD
 Base_url,data,string,http://havencore.local
 voice,data,string,af_heart
-wake_enabled,data,u8,0
+wake_enabled,data,string,1

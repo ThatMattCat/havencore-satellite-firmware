@@ -141,19 +141,16 @@ void audio_record_init()
 void audio_record_save(int16_t *audio_buffer, int audio_chunksize)
 {
 #if DEBUG_SAVE_PCM
+    /* Post-microWakeWord migration the feed task hands us mono 16 kHz
+     * int16 already. PCM_ONE_CHANNEL is the only path supported now —
+     * STT upload expects mono anyway (commit c9c1f51 fix). */
     if (record_flag) {
         uint16_t *record_buff = (uint16_t *)(record_audio_buffer + sizeof(wav_header_t));
         record_buff += record_total_len;
-        for (int i = 0; i < (audio_chunksize - 1); i++) {
+        for (int i = 0; i < audio_chunksize; i++) {
             if (record_total_len < (MAX_FILE_SIZE - sizeof(wav_header_t)) / 2) {
-#if PCM_ONE_CHANNEL
-                record_buff[ i * 1 + 0] = audio_buffer[i * 3 + 0];
+                record_buff[i] = (uint16_t)audio_buffer[i];
                 record_total_len += 1;
-#else
-                record_buff[ i * 2 + 0] = audio_buffer[i * 3 + 0];
-                record_buff[ i * 2 + 1] = audio_buffer[i * 3 + 1];
-                record_total_len += 2;
-#endif
             }
         }
     }

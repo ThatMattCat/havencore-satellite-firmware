@@ -216,6 +216,29 @@ static void show_panel_timer_handler(struct _lv_timer_t *t)
     ESP_LOGI(TAG, "Swich to panel[%d]", panel);
 }
 
+void ui_ctrl_show_fatal_error(const char *msg)
+{
+    bsp_display_lock(0);
+
+    if (err_countdown_timer) {
+        lv_timer_pause(err_countdown_timer);
+    }
+    lv_obj_add_flag(ui_PanelSleep, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_PanelListen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_PanelGet, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_PanelReply, LV_OBJ_FLAG_HIDDEN);
+
+    if (err_panel) {
+        lv_label_set_text(err_label_message, msg ? msg : "unknown error");
+        lv_label_set_text(err_label_countdown, "");
+        lv_obj_clear_flag(err_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    current_panel = UI_CTRL_PANEL_ERROR;
+    ESP_LOGE(TAG, "fatal: %s", msg ? msg : "(null)");
+
+    bsp_display_unlock();
+}
+
 void ui_ctrl_show_panel(ui_ctrl_panel_t panel, uint16_t timeout)
 {
     bsp_display_lock(0);

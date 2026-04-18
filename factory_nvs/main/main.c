@@ -19,10 +19,10 @@
 #define NVS_MODIFIED_BIT          BIT0
 #define SSID_SIZE 32
 #define PASSWORD_SIZE 64
-#define KEY_SIZE 165
 #define URL_SIZE 64
+#define WAKE_ENABLED_SIZE 4
 
-static const char *TAG = "ChatGPT_NVS";
+static const char *TAG = "factory_nvs";
 
 static EventGroupHandle_t s_event_group;
 static nvs_handle_t my_handle;
@@ -46,8 +46,8 @@ void app_main(void)
 
     char ssid[SSID_SIZE] = {0};
     char password[PASSWORD_SIZE] = {0};
-    char key[KEY_SIZE] = {0};
     char url[URL_SIZE] = {0};
+    char wake_enabled[WAKE_ENABLED_SIZE] = {0};
 
     s_event_group = xEventGroupCreate();
 
@@ -83,24 +83,31 @@ void app_main(void)
             ESP_LOGI(TAG, "stored password:%s", password);
         }
 
-        buf_len_long = sizeof(key);
-        err = nvs_get_str(my_handle, "ChatGPT_key", key, &buf_len_long);
-        if (err != ESP_OK || buf_len_long == 0) {
-            ESP_ERROR_CHECK(nvs_set_str(my_handle, "ChatGPT_key", CONFIG_OPENAI_API_KEY));
-            ESP_ERROR_CHECK(nvs_commit(my_handle));
-            ESP_LOGI(TAG, "no ChatGPT key, give a init value to key");
-        } else {
-            ESP_LOGI(TAG, "stored ChatGPT key:%s", key);
-        }
-
         buf_len_long = sizeof(url);
         err = nvs_get_str(my_handle, "Base_url", url, &buf_len_long);
         if (err != ESP_OK || buf_len_long == 0) {
-            ESP_ERROR_CHECK(nvs_set_str(my_handle, "Base_url", CONFIG_OPENAI_URL));
+            ESP_ERROR_CHECK(nvs_set_str(my_handle, "Base_url", CONFIG_HAVENCORE_BASE_URL));
             ESP_ERROR_CHECK(nvs_commit(my_handle));
             ESP_LOGI(TAG, "no base url, give a init value to key");
         } else {
             ESP_LOGI(TAG, "stored base url:%s", url);
+        }
+
+        /* wake_enabled as string so TinyUF2's CONFIG.INI surfaces it for
+         * editing. If a legacy u8-typed key is present, the main app's
+         * settings_read_parameter_from_nvs() migrates it to a string on
+         * next boot; leaving the type-mismatch case alone here. */
+        buf_len_long = sizeof(wake_enabled);
+        err = nvs_get_str(my_handle, "wake_enabled", wake_enabled, &buf_len_long);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_ERROR_CHECK(nvs_set_str(my_handle, "wake_enabled", "1"));
+            ESP_ERROR_CHECK(nvs_commit(my_handle));
+            ESP_LOGI(TAG, "no wake_enabled, seeded str \"1\"");
+        } else if (err == ESP_OK) {
+            ESP_LOGI(TAG, "stored wake_enabled:%s", wake_enabled);
+        } else {
+            ESP_LOGW(TAG, "wake_enabled read err=%s (main app will migrate)",
+                     esp_err_to_name(err));
         }
     }
     nvs_close(my_handle);
@@ -147,7 +154,7 @@ void app_main(void)
                 nvs_close(my_handle);
                 return;
             }
-            ESP_LOGD(TAG, "SSID", ssid);
+            ESP_LOGD(TAG, "SSID %s", ssid);
 
             buf_len_long = sizeof(password);
             err = nvs_get_str(my_handle, "password", password, &buf_len_long);
@@ -156,25 +163,16 @@ void app_main(void)
                 nvs_close(my_handle);
                 return;
             }
-            ESP_LOGD(TAG, "Password", password);
-
-            buf_len_long = sizeof(key);
-            err = nvs_get_str(my_handle, "ChatGPT_key", key, &buf_len_long);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to read 'ChatGPT_key' from NVS: %s", esp_err_to_name(err));
-                nvs_close(my_handle);
-                return;
-            }
-            ESP_LOGD(TAG, "OpenAI Key", key);
+            ESP_LOGD(TAG, "Password %s", password);
 
             buf_len_long = sizeof(url);
             err = nvs_get_str(my_handle, "Base_url", url, &buf_len_long);
             if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to read 'BASE_url' from NVS: %s", esp_err_to_name(err));
+                ESP_LOGE(TAG, "Failed to read 'Base_url' from NVS: %s", esp_err_to_name(err));
                 nvs_close(my_handle);
                 return;
             }
-            ESP_LOGD(TAG, "BASE url", url);
+            ESP_LOGD(TAG, "Base URL %s", url);
             nvs_close(my_handle);
         }
 

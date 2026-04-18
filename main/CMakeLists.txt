@@ -50,3 +50,4 @@ else()
 endif()
 
 spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)
+spiffs_create_partition_image(model ../model FLASH_IN_PROJECT)

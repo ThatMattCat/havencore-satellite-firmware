@@ -52,7 +52,7 @@ void ui_ScreenSetup_screen_init(void)
     lv_obj_set_y(ui_LabelSetupStepContent, lv_pct(20));
     lv_obj_set_align(ui_LabelSetupStepContent, LV_ALIGN_TOP_MID);
     lv_label_set_text(ui_LabelSetupStepContent,
-                      "1. Connect ESP-Box to PC.\n2. Open \"ESP-Box\" folder.\n3. Edit \"CONFIG.INI\" file with Wi-Fi SSID, password, and OpenAI key.\n4. Save the file.\n5. Restart the device.");
+                      "1. Connect to PC via USB.\n2. Open the \"ESP-BOX\" drive.\n3. Edit \"CONFIG.INI\": set ssid,\n    password, Base_url, wake_enabled.\n4. Save and eject.\n5. Unplug to reboot.");
     lv_obj_set_style_text_color(ui_LabelSetupStepContent, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_LabelSetupStepContent, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui_LabelSetupStepContent, 0, LV_PART_MAIN | LV_STATE_DEFAULT);

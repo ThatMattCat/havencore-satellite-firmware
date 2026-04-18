@@ -5,6 +5,8 @@
 
 #include "ui.h"
 #include "ui_helpers.h"
+#include "havencore_client.h"
+#include "settings.h"
 #include <stdio.h>
 
 ///////////////////// VARIABLES ////////////////////
@@ -80,10 +82,12 @@ lv_obj_t *ui_PanelSettings;
 lv_obj_t *ui_PanelSettingsSplitBar;
 lv_obj_t *ui_PanelSettingsSplitBarLeft;
 lv_obj_t *ui_SettingsSettingsSplitBarRight;
-lv_obj_t *ui_PanelSettingsRegion;
-lv_obj_t *ui_LabelSettingsRegion;
-void ui_event_DropdownSettingsRegion(lv_event_t *e);
-lv_obj_t *ui_DropdownSettingsRegion;
+lv_obj_t *ui_PanelSettingsDeviceName;
+lv_obj_t *ui_LabelSettingsDeviceName;
+void ui_event_TextareaSettingsDeviceName(lv_event_t *e);
+lv_obj_t *ui_TextareaSettingsDeviceName;
+void ui_event_KeyboardSettings(lv_event_t *e);
+lv_obj_t *ui_KeyboardSettings;
 void ui_event_ImageSettingsBack(lv_event_t *e);
 lv_obj_t *ui_ImageSettingsBack;
 void ui_event_ImageSettingsReset(lv_event_t *e);
@@ -300,18 +304,36 @@ void ui_event_ImageListenSettings(lv_event_t *e)
         }
     }
 }
-/*This function is for Server selection currently not using*/
-void ui_event_DropdownSettingsRegion(lv_event_t *e)
+void ui_event_TextareaSettingsDeviceName(lv_event_t *e)
 {
     lv_event_code_t event_code = lv_event_get_code(e);
-    // lv_obj_t *target = lv_event_get_target(e);
+    lv_obj_t *ta = lv_event_get_target(e);
 
-    if (event_code == LV_EVENT_VALUE_CHANGED) {
-        //  EventSettingsRegionValueChange(e);
-    } else if (event_code == LV_EVENT_LONG_PRESSED_REPEAT) {
-#if CONFIG_BSP_BOARD_ESP32_S3_BOX_Lite
-        lv_event_send(ui_ImageSettingsBack, LV_EVENT_CLICKED, NULL);
-#endif
+    if (event_code == LV_EVENT_FOCUSED) {
+        lv_keyboard_set_textarea(ui_KeyboardSettings, ta);
+        lv_obj_clear_flag(ui_KeyboardSettings, LV_OBJ_FLAG_HIDDEN);
+    } else if (event_code == LV_EVENT_DEFOCUSED) {
+        lv_obj_add_flag(ui_KeyboardSettings, LV_OBJ_FLAG_HIDDEN);
+    } else if (event_code == LV_EVENT_READY) {
+        const char *text = lv_textarea_get_text(ta);
+        if (text && text[0] != '\0') {
+            if (settings_set_device_name(text) == ESP_OK) {
+                havencore_client_set_device_name(text);
+            }
+        }
+        lv_obj_add_flag(ui_KeyboardSettings, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_state(ta, LV_STATE_FOCUSED);
+    }
+}
+
+void ui_event_KeyboardSettings(lv_event_t *e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    if (event_code == LV_EVENT_CANCEL) {
+        lv_obj_add_flag(ui_KeyboardSettings, LV_OBJ_FLAG_HIDDEN);
+        if (ui_TextareaSettingsDeviceName) {
+            lv_obj_clear_state(ui_TextareaSettingsDeviceName, LV_STATE_FOCUSED);
+        }
     }
 }
 
@@ -320,6 +342,12 @@ void ui_event_ImageSettingsBack(lv_event_t *e)
     lv_event_code_t event_code = lv_event_get_code(e);
 
     if (event_code == LV_EVENT_CLICKED) {
+        if (ui_KeyboardSettings) {
+            lv_obj_add_flag(ui_KeyboardSettings, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (ui_TextareaSettingsDeviceName) {
+            lv_obj_clear_state(ui_TextareaSettingsDeviceName, LV_STATE_FOCUSED);
+        }
         _ui_screen_change(ui_ScreenListen, LV_SCR_LOAD_ANIM_NONE, 0, 0);
 
         lv_obj_clear_flag(ui_PanelSleep, LV_OBJ_FLAG_HIDDEN);

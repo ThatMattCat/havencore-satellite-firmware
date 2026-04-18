@@ -42,6 +42,11 @@ void ui_ctrl_reply_set_audio_end_flag(bool result);
 
 void ui_ctrl_guide_jump(void);
 
+/* Show a persistent, non-countdown error message on the ERROR panel.
+ * Used for unrecoverable boot-time states like a blank ota_0 partition
+ * (UF2 recovery app missing). Caller parks after the call. */
+void ui_ctrl_show_fatal_error(const char *msg);
+
 #ifdef __cplusplus
 }
 #endif

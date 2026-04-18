@@ -34,7 +34,6 @@ typedef enum {
     NET_EVENT_SCAN,
     NET_EVENT_NTP,
     NET_EVENT_WEATHER,
-    NET_EVENT_POWERON_SCAN,
     NET_EVENT_MAX,
 } net_event_t;
 
