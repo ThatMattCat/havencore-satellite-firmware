@@ -9,8 +9,7 @@ Ported from Espressif's `esp-box/examples/chatgpt_demo` with the three OpenAI en
 MVP is running on two BOX-3s: tap **or** "Hey Selene" → STT → chat → TTS
 → playback, with status UI and LAN NVS config. Wake-word runs on-device
 via a clean-room microWakeWord runtime (replaced ESP-SR wakenet). See
-[docs/ROADMAP.md](docs/ROADMAP.md) for known issues and deferred work
-(notably the broken UF2 provisioning flow and pending 24 h soak).
+[docs/ROADMAP.md](docs/ROADMAP.md) for known issues and deferred work.
 
 ## Repo layout
 
@@ -31,12 +30,14 @@ via a clean-room microWakeWord runtime (replaced ESP-SR wakenet). See
 │   ├── microwakeword/              # on-device "Hey Selene" (streaming int8 TFLite)
 │   └── havencore_client/           # HTTP client for /v1/* endpoints
 ├── model/                          # microWakeWord model + manifest (*.tflite gitignored)
-├── factory_nvs/                    # sub-project that builds factory_nvs.bin (TinyUF2 fallback)
+├── factory_nvs/                    # sub-project that builds the TinyUF2 recovery app (→ ota_0)
+├── scripts/                        # bootstrap_ota0.sh and related helpers
 ├── spiffs/                         # prompt/feedback audio assets
 ├── squareline/                     # SquareLine Studio project (regenerates ui/)
 └── docs/
     ├── ARCHITECTURE.md             # how the firmware is wired
-    ├── PROVISIONING.md             # NVS provisioning (esptool workaround path)
+    ├── PROVISIONING.md             # UF2 mass-storage (primary) + esptool (appendix)
+    ├── SETTINGS.md                 # NVS schema + recipe for new settings
     └── ROADMAP.md                  # planned improvements, deferred work
 ```
 
@@ -51,12 +52,17 @@ source ~/esp/v5.5/esp-idf/export.sh
 Then from the repo root:
 
 ```sh
-# one-time: build the factory NVS sub-project
-cd factory_nvs && idf.py build && cd ..
+# one-time: build the TinyUF2 recovery sub-project
+(cd factory_nvs && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build)
 
 idf.py set-target esp32s3
 idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
 ```
+
+The top-level build copies `factory_nvs.bin` into the main project's
+`build/uf2/` and `idf.py flash` writes it to the `ota_0` partition at
+`0x700000`, so a single flash command seeds both the main app (factory)
+and the TinyUF2 recovery app. See `docs/PROVISIONING.md`.
 
 ## Flash
 
@@ -68,11 +74,11 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ## Provisioning
 
-Intended path: empty NVS → `settings_factory_reset()` flips boot to the
-TinyUF2 `ota_0` partition → BOX-3 mounts as USB mass-storage → edit
-`configuration.nvs`. That flow is currently broken — see
-[docs/PROVISIONING.md](docs/PROVISIONING.md) for the `esptool`/CSV
-workaround used to provision fresh devices today.
+Primary path: empty NVS (or Settings → factory-reset) →
+`settings_factory_reset()` flips boot to the TinyUF2 `ota_0` partition
+→ BOX-3 mounts as USB mass-storage → edit `CONFIG.INI`, save, eject.
+See [docs/PROVISIONING.md](docs/PROVISIONING.md) for the walkthrough and
+[docs/SETTINGS.md](docs/SETTINGS.md) for the full NVS schema.
 
 Required keys:
 
@@ -82,7 +88,7 @@ Required keys:
 | `password`    | string  | Wi-Fi PSK                                     |
 | `Base_url`    | string  | plain HTTP only; no `/v1/` suffix             |
 | `voice`       | string  | optional, defaults to `af_heart`              |
-| `wake_enabled`| u8      | optional, defaults to `1` (wake word armed); set to `0` for touch-to-talk only |
+| `wake_enabled`| string  | optional, `"0"`/`"1"`, defaults to `"1"` (wake word armed); set to `"0"` for touch-to-talk only |
 
 ## License
 

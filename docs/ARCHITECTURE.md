@@ -31,7 +31,7 @@ main/                    ESP-IDF component "main" — app code
     app_ui_events.c      LVGL button callbacks (tap-to-talk, factory reset)
     state.c              turn-level FSM: IDLE/LISTENING/UPLOADING/THINKING/SPEAKING/ERROR
     wake_word.c          runtime gate for the microWakeWord detector
-                         (currently hardcoded on — see ROADMAP)
+                         (NVS-backed via settings.wake_enabled)
     debug_overlay.c      long-press diagnostic overlay (LVGL)
   settings/              NVS wrapper (sys_param_t with ssid/password/url/voice/wake_enabled)
   ui/                    SquareLine-generated LVGL screens (ui_Panel{Sleep,Listen,Get,Reply})
@@ -55,13 +55,13 @@ model/                   microWakeWord artifacts (hey_selene_v1.tflite +
 `app_main()` in `main/main.c`:
 
 1. `nvs_flash_init()` — initialize NVS, erase+reinit if corrupt.
-2. `settings_read_parameter_from_nvs()` — read ssid/password/`Base_url`; *supposed to* fall back to the UF2 factory partition if missing, but that path is currently broken (see [ROADMAP.md](ROADMAP.md)).
+2. `settings_read_parameter_from_nvs()` — read ssid/password/`Base_url`; on missing required keys, calls `settings_factory_reset()` which flips boot to `ota_0` (TinyUF2 recovery app) and restarts. Also runs one-time migrations (legacy u8 `wake_enabled` → str, erase legacy `ChatGPT_key`).
 3. `bsp_spiffs_mount()` + `bsp_i2c_init()` + `bsp_display_start_with_config()` — bring up storage, I²C, LCD.
 4. `bsp_board_init()` — audio codec, buttons, touch.
 5. `ui_ctrl_init()` — LVGL panels + wifi-check timer.
 6. `debug_overlay_init()` — install long-press handler on the active screen.
 7. `sat_state_init()` — force UI to IDLE (SLEEP panel).
-8. `wake_word_set_enabled(sys_param->wake_enabled != 0)` — NVS default is 1, so typically on unless explicitly disabled. **Currently a no-op:** `wake_word.c` hardcodes `wake_word_enabled()` to `true` as a temporary workaround for the broken UF2 factory-reset flow; see the note in `wake_word.c` and ROADMAP "Wake-word (microWakeWord)".
+8. `wake_word_set_enabled(sys_param->wake_enabled != 0)` — NVS default is `"1"`, so typically on unless explicitly disabled via `CONFIG.INI`.
 9. `app_network_start()` — kick off Wi-Fi (synchronous until first attempt).
 10. `app_sr_start(false)` — mount the `model` SPIFFS partition, `mww_init()` the wake-word detector, spawn the feed + detect tasks pinned to cores 0/1.
 11. `boot_health_task` — one-shot task: waits for Wi-Fi, probes `/api/status`, `/api/stt/health`, `/api/tts/health`; logs results only.
@@ -148,4 +148,4 @@ See `partitions.csv`. Layout on 16 MB flash (post-microWakeWord rebalance):
 | `storage` | 0xc00000  | 2 MB    | SPIFFS — audio prompts in `spiffs/`                    |
 | `model`   | 0xe00000  | 1 MB    | SPIFFS — microWakeWord `.tflite` + `.json` in `model/` |
 
-No more `srmodels` partition — ESP-SR was removed in the microWakeWord migration. `ota_0` is kept large enough for the TinyUF2 factory app; shrinking it would break the UF2 provisioning flow once that's unbroken.
+No more `srmodels` partition — ESP-SR was removed in the microWakeWord migration. `ota_0` is kept large enough for the TinyUF2 recovery app (currently ~1 MB; 5 MB leaves headroom for future growth). Shrinking it below the recovery image size would break UF2 provisioning.

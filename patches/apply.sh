@@ -4,11 +4,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BSP=managed_components/espressif__esp-box-3/esp-box-3.c
-if [ -f "$BSP" ] && ! grep -q "tp_io_config.scl_speed_hz = 0" "$BSP"; then
-  patch -p1 -d managed_components/espressif__esp-box-3 \
+apply_box3_patch() {
+  local root="$1"
+  local bsp="$root/managed_components/espressif__esp-box-3/esp-box-3.c"
+  if [ ! -f "$bsp" ]; then
+    echo "$root: esp-box-3 BSP missing, skipping"
+    return
+  fi
+  if grep -q "tp_io_config.scl_speed_hz = 0" "$bsp"; then
+    echo "$root: esp-box-3 patch already applied"
+    return
+  fi
+  patch -p1 -d "$root/managed_components/espressif__esp-box-3" \
         < patches/esp-box-3-scl_speed_hz.patch
-  echo "applied esp-box-3-scl_speed_hz.patch"
-else
-  echo "esp-box-3 patch already applied or BSP missing"
-fi
+  echo "$root: applied esp-box-3-scl_speed_hz.patch"
+}
+
+apply_box3_patch "."
+apply_box3_patch "factory_nvs"

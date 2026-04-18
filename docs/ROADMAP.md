@@ -8,8 +8,10 @@ NVS provisioning) has landed; this doc captures what's left on top.
 
 Device #1 running the microWakeWord-migration branch against
 `http://selene.renman.wtf`. Full turn round-trip (tap → STT → chat → TTS)
-has been exercised. Device #2 provisioned today via the `esptool` NVS
-workaround (see `docs/PROVISIONING.md`).
+has been exercised. UF2 factory-reset flow repaired 2026-04-18: Settings →
+factory-reset now switches boot to `ota_0` and the TinyUF2 app mounts a
+USB drive for editing `CONFIG.INI`. Device #2 still needs a one-time
+`scripts/bootstrap_ota0.sh` pass before it can use the new flow.
 
 What's working:
 - Boot, PSRAM init, LVGL start, GT911 touch init (BSP patch applied).
@@ -28,31 +30,28 @@ What's working:
   overflow is no longer a blocker.
 
 What's shaky:
-- `wake_word_enabled()` is hardcoded to `true` (see note below).
 - No TLS in firmware. Server must stay on plain HTTP for the satellite, or
   we add the `mbedtls` bundle (deferred below).
-- UF2 factory-reset flow is broken — fresh devices need the `esptool`
-  provisioning path.
+- Pre-BSP BOOT-button recovery (`boot_button_held()` in `main/main.c`)
+  doesn't actually trigger UF2 on a cold boot — see Known Issues.
 
 ## Known issues
 
-### UF2 factory-reset flow broken (2026-04-18)
+### Pre-BSP BOOT-button recovery doesn't fire (2026-04-18)
 
-`settings_factory_reset()` does `esp_ota_set_boot_partition(ota_0)` +
-restart, but the device comes back into the main `factory` app instead of
-TinyUF2 mass-storage. Also, fresh BOX-3 units ship with `chatgpt_demo`
-placeholder NVS values (`My Network SSID` / `10.0.0.134/v1/`), so the
-"missing keys" branch of `settings_read_parameter_from_nvs()` doesn't fire
-in the first place — the device loops on Wi-Fi retry until you overwrite
-NVS manually.
+`main/main.c:boot_button_held()` polls GPIO0 (BSP_BUTTON_CONFIG_IO) very
+early in `app_main` and calls `settings_factory_reset()` if held ~2 s. On
+hardware the screen stays black and the host sees a USB device but never
+the UF2 mass-storage drive. Most likely cause: holding BOOT *through* the
+power-on reset puts the ESP32-S3 into ROM download mode before our app
+runs, so the poll never executes.
 
-Workaround: provision via `esptool` — see [`PROVISIONING.md`](PROVISIONING.md).
-Root cause is probably one of (a) `ota_0` doesn't actually contain the
-TinyUF2 factory app on these devices, (b) `esp_ota_set_boot_partition`
-succeeds but the bootloader falls back to `factory` because `ota_0`'s
-image header is invalid, or (c) the factory_nvs sub-project needs a
-rebuild + separate `write_flash 0x700000` pass. Worth confirming the next
-time we touch the factory_nvs sub-project.
+Settings → factory-reset already works end-to-end, so this only matters
+when a device is wedged (bad Wi-Fi creds, can't reach Settings). Planned
+fix: poll BOOT *after* the main app is up (e.g. while retrying Wi-Fi or
+from a dedicated FreeRTOS task), not during the pre-BSP window. Low
+priority — `scripts/bootstrap_ota0.sh` + the esptool path cover the
+"device is unrecoverable" cases until then.
 
 ### BSP touch init patch (`managed_components/` is gitignored)
 
@@ -86,15 +85,6 @@ micro_speech frontend), fed 16 kHz mono PCM from `audio_feed_task`. The
 dedicated 1 MB SPIFFS partition (`model` @ 0xe00000). This replaces both
 the deferred-Porcupine plan *and* ESP-SR's wakenet/AFE; neither ships in
 the firmware anymore.
-
-**2026-04-18 — `wake_word_enabled()` override.** `main/app/wake_word.c`
-hardcodes `wake_word_enabled()` to `true` and ignores
-`wake_word_set_enabled()`. Why: deployed devices still have NVS
-`wake_enabled=0` from the old default, and the UF2 factory-reset flow
-(see Known Issues) can't currently flip the key. Revert to the
-NVS-driven implementation (see git blame on `wake_word.c`) once UF2
-provisioning works again, or once we're confident every satellite has
-been re-provisioned via the `esptool` path.
 
 Tunables we still need to surface: `probability_cutoff`,
 `sliding_window_size`, `tensor_arena_size` come from the manifest JSON;
@@ -160,4 +150,3 @@ The trusted-LAN assumption is explicit. TLS would add an mbedtls bundle
 ## Housekeeping
 
 - When any deferred item above lands, move its section into the relevant commit message and delete it here.
-- The only blocker for a clean first-time-install UX is the UF2 factory-reset flow. Until that's fixed, new devices need the `esptool` path in `docs/PROVISIONING.md`.

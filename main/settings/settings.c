@@ -25,11 +25,36 @@ static sys_param_t g_sys_param = {0};
 
 esp_err_t settings_factory_reset(void)
 {
-    const esp_partition_t *update_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
-    ESP_LOGI(TAG, "Switch to partition UF2");
-    esp_ota_set_boot_partition(update_partition);
+    const esp_partition_t *update_partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+    if (!update_partition) {
+        ESP_LOGE(TAG, "ota_0 partition missing from table");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Confirm ota_0 actually holds a bootable image before flipping the
+     * boot pointer. If it's blank/corrupt the bootloader will silently
+     * fall back to `factory` and we'd loop forever; bail early instead
+     * so main.c can surface a recovery message. */
+    esp_app_desc_t desc;
+    esp_err_t err = esp_ota_get_partition_description(update_partition, &desc);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ota_0 has no valid app image (%s) - run "
+                 "scripts/bootstrap_ota0.sh to seed the UF2 recovery app",
+                 esp_err_to_name(err));
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition(ota_0) failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "switching to UF2 recovery (ota_0) and restarting");
     esp_restart();
-    return ESP_OK;
+    return ESP_OK;  /* unreachable */
 }
 
 esp_err_t settings_read_parameter_from_nvs(void)
@@ -74,14 +99,24 @@ esp_err_t settings_read_parameter_from_nvs(void)
         strlcpy(g_sys_param.voice, "af_heart", sizeof(g_sys_param.voice));
     }
 
-    /* wake_enabled (optional). Default: on. Set to 0 in NVS via UF2
-     * factory mode to disable wake word on a deployed device (leaves
-     * touch-to-talk working). */
-    uint8_t wake = 1;
-    if (nvs_get_u8(my_handle, "wake_enabled", &wake) != ESP_OK) {
-        wake = 1;
+    /* wake_enabled (optional). Stored as string "0"/"1" so TinyUF2's
+     * CONFIG.INI interface surfaces it for editing — the library only
+     * exposes string-typed keys. Legacy u8-typed value from older
+     * firmware is migrated below. Default: on. */
+    char wake_str[4] = {0};
+    size_t wake_len = sizeof(wake_str);
+    esp_err_t wake_str_ret = nvs_get_str(my_handle, "wake_enabled",
+                                         wake_str, &wake_len);
+    uint8_t legacy_wake = 0;
+    bool wake_needs_migration = false;
+    if (wake_str_ret == ESP_OK && wake_len > 0) {
+        g_sys_param.wake_enabled = (wake_str[0] == '1') ? 1 : 0;
+    } else if (nvs_get_u8(my_handle, "wake_enabled", &legacy_wake) == ESP_OK) {
+        g_sys_param.wake_enabled = legacy_wake ? 1 : 0;
+        wake_needs_migration = true;
+    } else {
+        g_sys_param.wake_enabled = 1;
     }
-    g_sys_param.wake_enabled = wake;
 
     // Read device_name (optional; defaults to "Satellite" if absent)
     len = sizeof(g_sys_param.device_name);
@@ -96,6 +131,40 @@ esp_err_t settings_read_parameter_from_nvs(void)
     bool mint_session_id = (sid_ret != ESP_OK || len == 0);
 
     nvs_close(my_handle);
+
+    /* One-time NVS migrations / cleanups requiring RW access. Safe to
+     * run on every boot: both operations are no-ops once the state is
+     * already correct. */
+    {
+        nvs_handle_t rw;
+        esp_err_t m_ret = nvs_open_from_partition(uf2_nvs_partition,
+                                                  uf2_nvs_namespace,
+                                                  NVS_READWRITE, &rw);
+        if (m_ret == ESP_OK) {
+            bool dirty = false;
+            if (wake_needs_migration) {
+                nvs_erase_key(rw, "wake_enabled");
+                nvs_set_str(rw, "wake_enabled",
+                            g_sys_param.wake_enabled ? "1" : "0");
+                ESP_LOGI(TAG, "migrated wake_enabled u8 -> str \"%s\"",
+                         g_sys_param.wake_enabled ? "1" : "0");
+                dirty = true;
+            }
+            /* Legacy ChatGPT_key from upstream chatgpt_demo. Not read by
+             * this firmware; erase so TinyUF2 stops surfacing it in
+             * CONFIG.INI. */
+            if (nvs_erase_key(rw, "ChatGPT_key") == ESP_OK) {
+                ESP_LOGI(TAG, "erased legacy ChatGPT_key");
+                dirty = true;
+            }
+            if (dirty) {
+                nvs_commit(rw);
+            }
+            nvs_close(rw);
+        } else {
+            ESP_LOGW(TAG, "migration nvs open failed: 0x%x", m_ret);
+        }
+    }
 
     if (mint_session_id) {
         uint8_t buf[16];
@@ -120,8 +189,11 @@ err:
     if (my_handle) {
         nvs_close(my_handle);
     }
-    settings_factory_reset();
-    return ret;
+    /* If factory reset succeeds it restarts — so a returned value here
+     * always means the UF2 recovery path is unreachable (ota_0 blank or
+     * corrupt). Propagate so main.c can show an on-screen recovery
+     * message instead of ESP_ERROR_CHECK-crashing. */
+    return settings_factory_reset();
 }
 
 sys_param_t *settings_get_parameter(void)

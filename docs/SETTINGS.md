@@ -6,7 +6,7 @@ surfacing it in the UI, and pushing it to the HavenCore server.
 
 Related docs:
 - [`PROVISIONING.md`](PROVISIONING.md) — seeding NVS on a fresh device
-  via `esptool` (first-boot workflow; does not touch this screen).
+  via UF2 mass-storage (primary) or esptool (appendix).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — where settings sit in the boot
   sequence and component graph.
 
@@ -26,21 +26,25 @@ The in-memory mirror is a single `sys_param_t` struct
 
 | Key | Type | Size | Required? | Default | Set by | Read by |
 |-----|------|------|-----------|---------|--------|---------|
-| `ssid` | str | 32 | yes | — | esptool (`PROVISIONING.md`) | Wi-Fi init |
-| `password` | str | 64 | yes | — | esptool | Wi-Fi init |
-| `Base_url` | str | 64 | yes | — | esptool | `havencore_client` (via `sys_param->url`) |
-| `voice` | str | 32 | no | `af_heart` | esptool | TTS request body |
-| `wake_enabled` | u8 | 1 | no | `1` | esptool | `wake_word_set_enabled()` (currently hardcoded — see `CLAUDE.md`) |
-| `device_name` | str | 32 | no | `Satellite` | esptool OR Settings screen | `X-Device-Name` header on every HavenCore request |
+| `ssid` | str | 32 | yes | — | UF2 CONFIG.INI (`PROVISIONING.md`) | Wi-Fi init |
+| `password` | str | 64 | yes | — | UF2 CONFIG.INI | Wi-Fi init |
+| `Base_url` | str | 64 | yes | — | UF2 CONFIG.INI | `havencore_client` (via `sys_param->url`) |
+| `voice` | str | 32 | no | `af_heart` | UF2 CONFIG.INI | TTS request body |
+| `wake_enabled` | str | 4 | no | `"1"` | UF2 CONFIG.INI (seeded by factory_nvs) | `wake_word_set_enabled()` |
+| `device_name` | str | 32 | no | `Satellite` | Settings screen OR UF2 CONFIG.INI | `X-Device-Name` header on every HavenCore request |
 | `session_id` | str | 40 | no | *(minted at first boot)* | `settings_read_parameter_from_nvs()` first-boot mint; rewritten by `settings_set_session_id()` on server rotation | `X-Session-Id` header on every HavenCore request |
+
+TinyUF2's CONFIG.INI interface only exposes string-typed NVS keys — that's why `wake_enabled` is stored as `"0"`/`"1"` rather than a `u8`. Legacy u8-typed values from older firmware are auto-migrated to string on boot (`settings.c` migration block). The upstream `chatgpt_demo` `ChatGPT_key` is also erased on boot so it stops appearing in CONFIG.INI.
 
 **Required vs. optional** is a design choice enforced by
 `settings_read_parameter_from_nvs()`:
 
 - **Required** keys `goto err` on `nvs_get_str` failure, which calls
   `settings_factory_reset()` — the device reboots into `ota_0` (TinyUF2)
-  so the user can re-provision. This path is currently broken, which is
-  why `PROVISIONING.md` uses `esptool` directly.
+  so the user can re-provision. TinyUF2 mounts the board as a USB drive;
+  the user edits `CONFIG.INI` and ejects, and on next boot the main app
+  reads the updated values. See `PROVISIONING.md` for the end-to-end
+  flow.
 - **Optional** keys fall back to a default inline (no `goto err`). Use
   this whenever the device can still run without the key set.
 
@@ -59,10 +63,10 @@ settings: voice:af_heart wake_enabled:1 device_name:Satellite session_id:<32 hex
 
 ## Write path
 
-Most settings are write-once at provisioning time via `esptool`.
-Anything the user can edit in-app needs a dedicated setter. Today the
-only writable key is `device_name`, with
-`settings_set_device_name(const char *name)`:
+Most settings are written at provisioning time via UF2 CONFIG.INI (or
+esptool for mass/recovery provisioning). Anything the user can edit
+in-app needs a dedicated setter. Today the only in-app writable key is
+`device_name`, with `settings_set_device_name(const char *name)`:
 
 ```c
 esp_err_t settings_set_device_name(const char *name) {

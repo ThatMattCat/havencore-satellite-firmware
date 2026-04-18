@@ -1,33 +1,119 @@
 # Provisioning
 
 How to get a fresh ESP32-S3-BOX-3 from flashed-but-empty NVS to a working
-HavenCore satellite. The intended path was the TinyUF2 mass-storage fallback
-in `ota_0`, but that flow is currently broken (see
-[ROADMAP.md](ROADMAP.md) → "UF2 factory-reset flow"). Until it's fixed,
-provision directly with `esptool`.
+HavenCore satellite. The primary path is TinyUF2 mass-storage in `ota_0`
+— device reboots into a USB drive, you edit `CONFIG.INI`, and normal
+boot resumes with real values. The esptool/CSV path from earlier is
+still here as an appendix for dev work and recovery.
 
-## Symptoms that tell you NVS is wrong
+## Primary path: TinyUF2 mass-storage
 
-On boot, `main/settings/settings.c` logs the values it read:
+### 1. One-time first flash per board
+
+```sh
+source ~/esp/v5.5/esp-idf/export.sh
+./patches/apply.sh                      # re-apply BSP touch patch if needed
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+The top-level build writes both apps: the main firmware to `factory`
+(0x10000) and the TinyUF2 recovery app to `ota_0` (0x700000), via the
+`esptool_py_flash_to_partition(flash "ota_0" ...)` wiring in
+`main/CMakeLists.txt`. No separate esptool step.
+
+Pristine device with empty NVS: `settings_read_parameter_from_nvs()`
+fails the "required keys" check, calls `settings_factory_reset()`, and
+the device auto-reboots into UF2. Jump to step 3.
+
+Device with old `chatgpt_demo` placeholder NVS (`My Network SSID` /
+`10.0.0.134/v1/`): Wi-Fi will fail but the UI still comes up on the
+Sleep panel. Continue to step 2.
+
+### 2. Trigger factory-reset from the UI
+
+From the Sleep panel:
+1. Tap the gear / Settings icon.
+2. Tap the factory-reset icon and confirm.
+
+`settings_factory_reset()` switches the boot partition to `ota_0` and
+restarts into the TinyUF2 app.
+
+### 3. Edit CONFIG.INI on the mounted drive
+
+The host sees a new USB mass-storage device (typical label: `BOX3BOOT`
+or similar). Open `CONFIG.INI` and set the keys under `[configuration]`:
+
+```ini
+[configuration]
+ssid=Your-Wifi-SSID
+password=your-wifi-psk
+Base_url=http://selene.renman.wtf
+voice=af_heart
+wake_enabled=1
+```
+
+Note on `Base_url`:
+- Plain HTTP only. The firmware has no TLS.
+- Do **not** include the `/v1/` suffix. `build_url()` strips it, but
+  also logs a one-shot warning — just leave it off.
+
+Keys NOT supplied in CONFIG.INI keep their existing NVS values (if any)
+or fall back to defaults in `settings.c`:
+- `voice` → `af_heart`
+- `wake_enabled` → `1`
+- `device_name` → `Satellite` (editable in-app via Settings)
+- `session_id` → minted on first main-app boot
+
+Save and eject the drive cleanly. TinyUF2 writes the new keys into NVS,
+switches the boot partition back to `factory`, and resets.
+
+### 4. Verify
 
 ```
-settings: stored ssid:My Network SSID
-settings: stored password:My Password
-settings: stored Base URL:http://10.0.0.134/v1/
-settings: voice:af_heart wake_enabled:1
+settings: stored ssid:<your ssid>
+settings: stored Base URL:http://selene.renman.wtf
+...
+wifi:<ba-add>...got ip:10.0.0.XXX
+boot_health: /api/status -> HTTP 200
+boot_health: /api/stt/health -> HTTP 200
+boot_health: /api/tts/health -> HTTP 200
 ```
 
-If you see the `My Network SSID` / `My Password` / `10.0.0.134/v1/`
-placeholders, NVS was seeded from the upstream `chatgpt_demo` factory app
-and the device will loop on `sta disconnect, retry attempt N`. These keys
-are not empty, so `settings_factory_reset()` does **not** fire — it doesn't
-fall through to the UF2 partition. You have to overwrite NVS yourself.
+### Re-provisioning later
 
-## The workaround: write NVS directly with esptool
+Any time you need to change Wi-Fi creds, `Base_url`, voice, or
+`wake_enabled`: Sleep → Settings → factory-reset → edit CONFIG.INI →
+eject. Same flow. NVS isn't wiped, only the keys you rewrite change.
+
+## Recovery: `scripts/bootstrap_ota0.sh`
+
+Thin wrapper around the esptool calls for devices whose `ota_0` is
+blank/corrupt. Normally you don't need this — `idf.py flash` seeds
+`ota_0` automatically. Keep it around for:
+
+- A board that was flashed with an older firmware revision that didn't
+  include the `esptool_py_flash_to_partition` wiring.
+- `ota_0` got erased somehow (manual `erase_region`, partition-table
+  reshuffle).
+
+```sh
+source ~/esp/v5.5/esp-idf/export.sh
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
+scripts/bootstrap_ota0.sh -p /dev/ttyACM0
+```
+
+The script also erases the `nvs` partition (0x9000, 0x4000) to clear
+chatgpt_demo placeholder values. That's one-time, destructive data loss
+for any existing `device_name` / `session_id` on that board. Plain
+`idf.py flash` does not erase NVS.
+
+## Appendix: direct NVS write with esptool
+
+For cases where the UF2 flow isn't an option — scripted mass provisioning,
+CI fixtures, or recovering a device that's too wedged to enter UF2.
 
 ### 1. Make a config CSV
-
-Copy the example and fill in real values:
 
 ```sh
 cp nvs_config.example.csv nvs_config.csv
@@ -43,24 +129,17 @@ ssid,data,string,Your-Wifi-SSID
 password,data,string,your-wifi-psk
 Base_url,data,string,http://selene.renman.wtf
 voice,data,string,af_heart
-wake_enabled,data,u8,1
+wake_enabled,data,string,1
 ```
-
-Note on `Base_url`:
-- Plain HTTP only. The firmware has no TLS (`mbedtls` bundle isn't enabled).
-- Do **not** include the `/v1/` suffix. `build_url()` strips it, but also
-  logs a one-shot warning when it does — just leave it off.
 
 ### 2. Generate and flash the NVS binary
 
 ```sh
 source ~/esp/v5.5/esp-idf/export.sh
 
-# 0x4000 matches the nvs partition size in partitions.csv
 python $IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py \
     generate nvs_config.csv nvs_config.bin 0x4000
 
-# flash at the nvs partition offset
 python -m esptool -p /dev/ttyACM0 --chip esp32s3 \
     write_flash 0x9000 nvs_config.bin
 ```
@@ -71,37 +150,5 @@ python -m esptool -p /dev/ttyACM0 --chip esp32s3 \
 idf.py -p /dev/ttyACM0 monitor
 ```
 
-You should see the settings log reflect your real values, followed by a
-successful DHCP lease and the three health probes returning 200:
-
-```
-settings: stored ssid:Renman
-settings: stored Base URL:http://selene.renman.wtf
-...
-wifi:<ba-add>idx:0 (ifx:0, ...) got ip:10.0.0.147
-boot_health: /api/status -> HTTP 200
-boot_health: /api/stt/health -> HTTP 200
-boot_health: /api/tts/health -> HTTP 200
-```
-
-## When to re-provision
-
-- New out-of-the-box device (seed `chatgpt_demo` placeholders are present).
-- Server moved (e.g. old `ai.renman.wtf` → new `selene.renman.wtf`).
-- Wi-Fi credentials rotated.
-- Toggling `wake_enabled` on/off. Currently moot because `wake_word.c`
-  hardcodes the flag to `true` as a stopgap — see the 2026-04-18 note in
-  ROADMAP — but once that revert lands, flipping the NVS key is the only
-  way.
-
-## Once the UF2 flow is fixed
-
-The intended provisioning UX is:
-
-1. Device with missing/empty NVS keys boots → `settings_factory_reset()` flips
-   the boot partition to `ota_0` (TinyUF2) and restarts.
-2. BOX-3 appears on the host as a USB mass-storage drive.
-3. User edits `configuration.nvs` on that drive and resets.
-
-When that's working again, prefer it for end-user setup. The
-`esptool`/CSV path above is only the dev workaround.
+Settings log should reflect your values, followed by a DHCP lease and
+three 200-OK health probes.

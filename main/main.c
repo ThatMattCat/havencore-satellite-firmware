@@ -11,6 +11,8 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "app_ui_ctrl.h"
 #include "havencore_client.h"
@@ -33,6 +35,34 @@
 
 static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
+
+/* Pre-BSP poll for a long-press on the BOX-3 "Config" button (GPIO0,
+ * active-low). Runs before display init so a user whose Wi-Fi is
+ * misconfigured can force the UF2 recovery path without navigating the
+ * Settings screen. Hold through power-on for ~2 s. */
+static bool boot_button_held(uint32_t hold_ms)
+{
+    const gpio_num_t btn = BSP_BUTTON_CONFIG_IO;
+    const gpio_config_t cfg = {
+        .pin_bit_mask = BIT64(btn),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    if (gpio_get_level(btn) != 0) {
+        return false;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    while (gpio_get_level(btn) == 0) {
+        if ((esp_timer_get_time() - t0) / 1000 >= (int64_t)hold_ms) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return false;
+}
 
 /* Persist a server-rotated X-Session-Id back into NVS so subsequent boots
  * pick up the new id. Fires on the HTTP task context from havencore_chat. */
@@ -155,7 +185,17 @@ void app_main()
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    ESP_ERROR_CHECK(settings_read_parameter_from_nvs());
+
+    if (boot_button_held(2000)) {
+        ESP_LOGW(TAG, "BOOT held at startup - forcing UF2 recovery");
+        esp_err_t fr = settings_factory_reset();
+        ESP_LOGE(TAG, "BOOT-held factory reset did not restart: %s",
+                 esp_err_to_name(fr));
+        /* Fall through to normal boot; the fatal-error screen further
+         * down will catch the blank-ota_0 case. */
+    }
+
+    esp_err_t settings_ret = settings_read_parameter_from_nvs();
     sys_param = settings_get_parameter();
 
     havencore_client_set_session_id(sys_param->session_id);
@@ -180,6 +220,24 @@ void app_main()
     bsp_display_backlight_on();
     ui_ctrl_init();
     debug_overlay_init();
+
+    if (settings_ret != ESP_OK) {
+        /* NVS required keys missing AND the UF2 recovery partition is
+         * unreachable (blank, corrupt, or absent). Park on a recovery
+         * message — don't start the normal app flow with undefined
+         * sys_param. Fix is either flashing factory_nvs.bin to ota_0 or
+         * provisioning NVS directly per docs/PROVISIONING.md. */
+        ESP_LOGE(TAG, "settings_read_parameter_from_nvs -> %s; parking",
+                 esp_err_to_name(settings_ret));
+        ui_ctrl_show_fatal_error(
+            "NVS empty and UF2 recovery image missing.\n"
+            "Hold BOOT during power-on, or run\n"
+            "scripts/bootstrap_ota0.sh on the host.");
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
+    }
+
     sat_state_init();
     wake_word_set_enabled(sys_param->wake_enabled != 0);
     app_network_start();
