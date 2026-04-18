@@ -8,10 +8,6 @@ dependencies.lock
 
 # Contains Wi-Fi credentials + server URL; use nvs_config.example.csv as the template.
 # Generated via the esptool path in docs/PROVISIONING.md.
-nvs.bin
 nvs_config.csv
 nvs_config.bin
 
-# microWakeWord model binary — user-owned training artifact. Manifest
-# (model/*.json) is committed so the firmware build is reproducible.
-model/*.tflite

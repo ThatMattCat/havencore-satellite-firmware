@@ -9,7 +9,8 @@ extern "C" {
 #endif
 
 /*
- * HavenCore HTTP client — three endpoints per plan.md §HavenCore API Contract.
+ * HavenCore HTTP client — three OpenAI-compatible endpoints:
+ *   /v1/audio/transcriptions, /v1/chat/completions, /v1/audio/speech.
  *
  * All calls are synchronous request/response over HTTP (no TLS, no auth —
  * assumed trusted LAN). base_url is e.g. "http://havencore.local" (no

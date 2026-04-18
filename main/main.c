@@ -35,7 +35,7 @@ static char *TAG = "app_main";
 static sys_param_t *sys_param = NULL;
 
 /* Boot-time health probes. Non-blocking: we report results to the log but
- * always proceed to ready. Plan.md §Verification Plan item 1. */
+ * always proceed to ready. */
 static void boot_health_task(void *arg)
 {
     while (wifi_connected_already() != WIFI_STATUS_CONNECTED_OK) {

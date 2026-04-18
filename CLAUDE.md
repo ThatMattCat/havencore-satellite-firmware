@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ESP-IDF v5.5 firmware for an ESP32-S3-BOX-3 voice satellite. Ported from Espressif's `esp-box/examples/chatgpt_demo`; the OpenAI endpoints are repointed at a self-hosted HavenCore agent on the LAN. MVP is touch-to-talk: tap → STT → chat → TTS → playback.
 
-`plan.md` at the repo root is the authoritative spec. `docs/ARCHITECTURE.md` describes how the firmware is currently wired; `docs/ROADMAP.md` tracks known issues and deferred work; `docs/PROVISIONING.md` covers the esptool NVS workaround for fresh devices. Update `plan.md` first when changing direction.
+`docs/ARCHITECTURE.md` describes how the firmware is currently wired; `docs/ROADMAP.md` tracks MVP verification state, known issues, and deferred work; `docs/PROVISIONING.md` covers the esptool NVS workaround for fresh devices. When changing direction, update ROADMAP first.
 
 ## Build & flash
 

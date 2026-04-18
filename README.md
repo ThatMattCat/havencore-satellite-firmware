@@ -6,13 +6,16 @@ Ported from Espressif's `esp-box/examples/chatgpt_demo` with the three OpenAI en
 
 ## Status
 
-MVP touch-to-talk path — STT → chat → TTS → playback — is running on hardware. Active work is the microWakeWord migration (on-device "Hey Selene" detection, replacing ESP-SR wakenet + Porcupine plan). See [docs/ROADMAP.md](docs/ROADMAP.md) for what's left and known issues.
+MVP is running on two BOX-3s: tap **or** "Hey Selene" → STT → chat → TTS
+→ playback, with status UI and LAN NVS config. Wake-word runs on-device
+via a clean-room microWakeWord runtime (replaced ESP-SR wakenet). See
+[docs/ROADMAP.md](docs/ROADMAP.md) for known issues and deferred work
+(notably the broken UF2 provisioning flow and pending 24 h soak).
 
 ## Repo layout
 
 ```
 .
-├── plan.md                         # authoritative MVP spec
 ├── CMakeLists.txt                  # top-level ESP-IDF project
 ├── partitions.csv                  # flash layout (16 MB)
 ├── sdkconfig.defaults              # base Kconfig defaults

@@ -1,6 +1,8 @@
 # Roadmap
 
-Tracks known issues, deferred work, and planned improvements. The authoritative spec remains [`../plan.md`](../plan.md); this document captures what's left on top of what's already built.
+Tracks known issues, deferred work, and planned improvements. MVP scope
+(touch + "Hey Selene" → STT → chat → TTS → playback, with status UI and
+NVS provisioning) has landed; this doc captures what's left on top.
 
 ## Current status (2026-04-18)
 
@@ -54,9 +56,9 @@ time we touch the factory_nvs sub-project.
 
 `esp-box-3` 1.1.3 uses the legacy `esp_lcd_new_panel_io_i2c_v1` path, which rejects a non-zero `scl_speed_hz`. Newer `esp_lcd_touch_tt21100` macros set that field, so the BSP crashes in `bsp_touch_new()` on boot. Fix is a one-line patch that clears `tp_io_config.scl_speed_hz` before the call. Because `managed_components/` is gitignored and regenerated on `idf.py fullclean`, the patch lives under `patches/esp-box-3-scl_speed_hz.patch`. Run `./patches/apply.sh` after any re-resolve. Drop this workaround when the BSP moves to the new `i2c_master` driver.
 
-## MVP verification (Phase 6 of the original plan)
+## MVP verification checklist
 
-Once the device is attached via USB/IP, run through [`plan.md` §Verification Plan](../plan.md) items 1–6:
+Manual checkpoints for a freshly-flashed device attached via USB/IP:
 
 1. Boot: debug overlay shows `/api/status` 200 on long-press.
 2. Happy path: tap → "what time is it" → audible correct reply.
@@ -64,8 +66,10 @@ Once the device is attached via USB/IP, run through [`plan.md` §Verification Pl
 4. Multi-turn: two turns within 180 s referencing each other.
 5. Endpointing: 1.2 s silence cut-off + 15 s hard cap.
 6. Error path: stop the HavenCore container → ERROR screen + auto-return.
-
-Item 7 (wake-word) and item 8 (24 h soak) are deferred.
+7. Wake-word range: "Hey Selene, …" detected from 1 m and 3 m, and the
+   wake phrase itself isn't included in the STT upload. **Deferred.**
+8. Soak: idle 24 h, then trigger a turn — verify Wi-Fi reconnect + clean
+   round-trip. **Deferred.**
 
 ## Deferred (not in MVP)
 
@@ -105,7 +109,7 @@ Neither constant is exposed via NVS yet. Add as optional keys when the defaults 
 
 ### Barge-in / AEC
 
-Plan.md explicitly excludes this from MVP. ESP-SR's AFE (which provided an
+Explicitly out of MVP scope. ESP-SR's AFE (which provided an
 AEC hook) was removed in the microWakeWord migration, so there's no
 existing echo-cancel plumbing to enable — we'd need to bring AEC back in
 as a standalone component, re-routing the I2S TX buffer back into it as
@@ -115,6 +119,28 @@ usually clips the mics anyway.
 ### SSE streaming of `/v1/chat/completions`
 
 Today we wait for the full chat response before starting TTS (stream=false in the request body). Streaming would let us begin TTS mid-response and cut latency, but requires an SSE parser and chunked-body handling that esp_http_client doesn't give us directly. Worth doing once baseline latency is measured.
+
+### Streaming TTS
+
+Kokoro currently returns a full WAV from `/v1/audio/speech`. A chunked/streaming
+variant would let the device begin playback before the full body arrives and
+cut perceived latency by ~1–2 s. Server-side work, then a firmware switch
+to parse the WAV header early and feed PCM to I2S as bytes arrive (the
+playback path already does this for the full-body case).
+
+### WebSocket `/ws/chat`
+
+Would let the device display real-time status ("searching web…", "controlling
+lights…") while the agent runs tools, instead of a generic THINKING panel.
+Moderate firmware complexity (WebSocket client + event parser). Revisit once
+baseline UX is stable.
+
+### Always-on local VAD (no touch / wake gate)
+
+`simple_vad.c` is only used to endpoint the listen window today; gating wake
+on touch or microWakeWord means the device never starts capture on its own.
+Flipping to always-on VAD would save the gesture/phrase but risks
+false-trigger spam — not worth it until the pipeline is rock-solid.
 
 ### Multi-device identity (`X-Satellite-Id` header)
 
@@ -126,10 +152,10 @@ Factory + app partitions are in place but there's no update flow. Plan: pull sig
 
 ### TLS / auth
 
-Trusted-LAN assumption is explicit in plan.md. Adds a mbedtls bundle (~80 KB) and a cert/key flow. Punt until we put a satellite outside the LAN.
+The trusted-LAN assumption is explicit. TLS would add an mbedtls bundle
+(~80 KB) and a cert/key flow. Punt until we put a satellite outside the LAN.
 
 ## Housekeeping
 
-- `plan.md` is the source of truth for intent; if we change direction, update it there first, then reflect in this doc.
 - When any deferred item above lands, move its section into the relevant commit message and delete it here.
 - The only blocker for a clean first-time-install UX is the UF2 factory-reset flow. Until that's fixed, new devices need the `esptool` path in `docs/PROVISIONING.md`.

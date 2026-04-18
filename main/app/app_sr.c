@@ -49,7 +49,7 @@ static const char *TAG = "app_sr";
 /* Hard cap on how long we stay in LISTENING before force-ending the turn.
  * VAD silence normally ends things at ~1.2 s — but a continuously noisy
  * room can hold vad_state at SPEECH indefinitely, which would trap us in
- * the LISTENING panel with the mic open. Plan.md specifies 15 s. */
+ * the LISTENING panel with the mic open. */
 #define LISTEN_MAX_US        (15LL * 1000LL * 1000LL)
 
 /* Consecutive 20 ms silence frames before cutoff. 60 * 20 ms = 1.2 s,

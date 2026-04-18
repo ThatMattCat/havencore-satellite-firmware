@@ -1,6 +1,7 @@
 # Architecture
 
-This document describes how the firmware is wired today. For the design intent and MVP scope, see [`../plan.md`](../plan.md).
+This document describes how the firmware is wired today. For what's left
+and deferred work, see [`ROADMAP.md`](ROADMAP.md).
 
 ## Hardware
 
@@ -95,7 +96,8 @@ start_havencore_turn (main.c)
     audio_player idle callback -> sat_state_set(IDLE) via ui_ctrl_reply_set_audio_end_flag
 
 Any leg returning non-OK -> debug_overlay_set_last_error(msg) + sat_state_set(ERROR)
-ERROR transitions show the SLEEP panel with a 3000 ms auto-return.
+ERROR transitions show a dedicated UI_CTRL_PANEL_ERROR with a 3 s countdown
+before auto-returning to IDLE.
 ```
 
 ## State machine
@@ -109,7 +111,7 @@ ERROR transitions show the SLEEP panel with a 3000 ms auto-return.
 | UPLOADING    | `UI_CTRL_PANEL_GET`  | VAD silence → start_havencore_turn starts |
 | THINKING     | `UI_CTRL_PANEL_GET`  | STT completes                            |
 | SPEAKING     | `UI_CTRL_PANEL_REPLY`| chat completes, before TTS request       |
-| ERROR        | `UI_CTRL_PANEL_SLEEP` (3 s)| any HTTP failure along the turn    |
+| ERROR        | `UI_CTRL_PANEL_ERROR` (3 s countdown) | any HTTP failure along the turn |
 
 Wake-word is gated at the source in `audio_detect_task`: `mww_poll_detected()` only triggers a LISTENING transition when `wake_word_enabled()` returns true. The feed path keeps calling `mww_feed_pcm()` unconditionally — skipping feeds while listening would tear the streaming model's hidden state. The manual-trigger path (touch → `manul_detect_flag`) is always on and re-uses the same detect-flag flow, so touch-to-talk works even if `wake_word_enabled()` returns false.
 
@@ -124,7 +126,7 @@ Implemented in `components/havencore_client/havencore_client.c`, using `esp_http
 | `havencore_tts`       | POST `/v1/audio/speech`          | JSON: `input`, `model=tts-1`, `voice`, `response_format=wav` | raw WAV 16 kHz/16-bit mono body      |
 | `havencore_get_ok`    | GET `<path>`                     | —                                                         | 2xx = OK; used for boot health probes   |
 
-No TLS, no auth — plan.md assumes a trusted LAN. Agent sessions are server-side (180 s idle timeout), so the device does **not** rebuild chat history on each request.
+No TLS, no auth — the firmware assumes a trusted LAN. Agent sessions are server-side (180 s idle timeout), so the device does **not** rebuild chat history on each request.
 
 ## UI
 
