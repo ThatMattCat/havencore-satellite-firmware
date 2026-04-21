@@ -62,6 +62,12 @@ esp_err_t app_sr_stop(void);
 esp_err_t app_sr_get_result(sr_result_t *result, TickType_t xTicksToWait);
 esp_err_t app_sr_start_once(void);
 
+/* Live-update hooks for the listen-window tunables. Values are clamped
+ * internally; pass the user-facing units (seconds, milliseconds). The
+ * change takes effect on the next LISTENING frame — no reboot needed. */
+void app_sr_set_listen_cap_s(uint32_t seconds);
+void app_sr_set_silence_ms(uint32_t ms);
+
 #ifdef __cplusplus
 }
 #endif

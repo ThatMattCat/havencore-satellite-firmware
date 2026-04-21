@@ -33,6 +33,8 @@ The in-memory mirror is a single `sys_param_t` struct
 | `wake_enabled` | str | 4 | no | `"1"` | UF2 CONFIG.INI (seeded by factory_nvs) | `wake_word_set_enabled()` |
 | `device_name` | str | 32 | no | `Satellite` | Settings screen OR UF2 CONFIG.INI | `X-Device-Name` header on every HavenCore request |
 | `session_id` | str | 40 | no | *(minted at first boot)* | `settings_read_parameter_from_nvs()` first-boot mint; rewritten by `settings_set_session_id()` on server rotation | `X-Session-Id` header on every HavenCore request |
+| `listen_cap_s` | str | 12 | no | `"15"` (bounds 5–60) | Settings screen slider OR UF2 CONFIG.INI | `app_sr.c` LISTEN wall-clock cutoff |
+| `silence_ms` | str | 12 | no | `"1200"` (bounds 300–3000) | Settings screen slider OR UF2 CONFIG.INI | `app_sr.c` end-of-utterance silence cutoff |
 
 TinyUF2's CONFIG.INI interface only exposes string-typed NVS keys — that's why `wake_enabled` is stored as `"0"`/`"1"` rather than a `u8`. Legacy u8-typed values from older firmware are auto-migrated to string on boot (`settings.c` migration block). The upstream `chatgpt_demo` `ChatGPT_key` is also erased on boot so it stops appearing in CONFIG.INI.
 
@@ -59,6 +61,7 @@ settings: stored ssid:...
 settings: stored password:...
 settings: stored Base URL:...
 settings: voice:af_heart wake_enabled:1 device_name:Satellite session_id:<32 hex chars>
+settings: listen_cap_s:15 silence_ms:1200
 ```
 
 ## Write path
@@ -185,6 +188,49 @@ reuse `ui_KeyboardSettings` — do not create another one. Create
 per-row event handlers that each call `lv_keyboard_set_textarea(ui_KeyboardSettings, <that_ta>)`
 on focus.
 
+### Numeric slider flow
+
+For numeric tunables (e.g. `listen_cap_s`, `silence_ms`), use an
+`lv_slider` instead of the textarea + keyboard pair — it's touch-native
+and bounds are enforced by the widget. Pattern:
+
+```c
+ui_SliderSettingsFoo = lv_slider_create(ui_PanelSettingsFoo);
+lv_slider_set_range(ui_SliderSettingsFoo, FOO_MIN, FOO_MAX);
+lv_slider_set_value(ui_SliderSettingsFoo, settings_get_parameter()->foo, LV_ANIM_OFF);
+lv_obj_add_event_cb(ui_SliderSettingsFoo, ui_event_SliderSettingsFoo, LV_EVENT_ALL, NULL);
+
+// Companion label that shows the current value (units + formatting).
+ui_LabelSettingsFooValue = lv_label_create(ui_PanelSettingsFoo);
+```
+
+The handler has two legs:
+
+```c
+void ui_event_SliderSettingsFoo(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *slider = lv_event_get_target(e);
+
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        // Live: update the readout label while the user drags.
+        update_value_label(lv_slider_get_value(slider));
+    } else if (code == LV_EVENT_RELEASED) {
+        // Commit: persist + push to the running consumer.
+        int32_t v = lv_slider_get_value(slider);
+        if (settings_set_foo(v) == ESP_OK) {
+            consumer_set_foo(v);
+        }
+    }
+}
+```
+
+Persist on `LV_EVENT_RELEASED` (finger lifted), not on every
+`VALUE_CHANGED`, so NVS isn't hammered with per-pixel writes.
+
+**Unit scaling.** LVGL sliders are integer-valued. For sub-unit
+precision, store scaled values (e.g. `silence_ms / 100` with a 100 ms
+step) and translate at the boundary.
+
 ### SquareLine regeneration hazard
 
 `main/ui/screens/ui_ScreenSettings.c`, `main/ui/ui.c`, and
@@ -193,17 +239,21 @@ on focus.
 If you must regenerate, re-apply in order:
 
 1. In `ui_ScreenSettings.c`: the `ui_PanelSettingsDeviceName` +
-   `ui_LabelSettingsDeviceName` + `ui_TextareaSettingsDeviceName` +
+   `ui_LabelSettingsDeviceName` + `ui_TextareaSettingsDeviceName`
+   block, the `ui_PanelSettingsListenCap` + slider + value-label block,
+   the `ui_PanelSettingsSilence` + slider + value-label block, and the
    `ui_KeyboardSettings` block; delete any Region widgets the
    regenerator brings back; swap the event-cb registration from
-   `ui_DropdownSettingsRegion` to nothing (the textarea registers its
-   own handler inline).
-2. In `ui.c`: the `ui_event_TextareaSettingsDeviceName` and
-   `ui_event_KeyboardSettings` handlers, the `havencore_client.h` /
-   `settings.h` includes, and the keyboard-hide lines inside
-   `ui_event_ImageSettingsBack`.
-3. In `ui.h`: swap the four `ui_*Region*` externs for the six
-   `ui_*DeviceName*` / `ui_*Keyboard*` externs.
+   `ui_DropdownSettingsRegion` to nothing (the textarea and sliders
+   register their own handlers inline).
+2. In `ui.c`: `ui_event_TextareaSettingsDeviceName`,
+   `ui_event_KeyboardSettings`, `ui_event_SliderSettingsListenCap`,
+   and `ui_event_SliderSettingsSilence` handlers; the
+   `havencore_client.h` / `settings.h` / `app_sr.h` includes; and
+   the keyboard-hide lines inside `ui_event_ImageSettingsBack`.
+3. In `ui.h`: swap the `ui_*Region*` externs for the Device Name,
+   Listen Cap (panel + label + slider + value label), Silence
+   (panel + label + slider + value label), and Keyboard externs.
 
 Long-term fix: open `chat_gpt.spj` in SquareLine, delete Region, add
 Device Name + Keyboard, and commit the updated `.spj` so regeneration

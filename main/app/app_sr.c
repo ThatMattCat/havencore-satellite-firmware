@@ -38,6 +38,7 @@
 #include "wake_word.h"
 #include "simple_vad.h"
 #include "microwakeword.h"
+#include "settings.h"
 
 static const char *TAG = "app_sr";
 
@@ -46,15 +47,14 @@ static const char *TAG = "app_sr";
  * With 2-channel I2S capture we read 1280 bytes per tick. */
 #define CHUNK_SAMPLES        320
 
-/* Hard cap on how long we stay in LISTENING before force-ending the turn.
- * VAD silence normally ends things at ~1.2 s — but a continuously noisy
- * room can hold vad_state at SPEECH indefinitely, which would trap us in
- * the LISTENING panel with the mic open. */
-#define LISTEN_MAX_US        (15LL * 1000LL * 1000LL)
-
-/* Consecutive 20 ms silence frames before cutoff. 60 * 20 ms = 1.2 s,
- * matches the behaviour we had with AFE VAD + frame_keep=100. */
-#define SILENCE_FRAMES_CUTOFF 60
+/* Listen-window tunables, now runtime-editable via settings. Defaults
+ * mirror the historical compile-time constants (15 s cap, 1.2 s silence).
+ * Both are read per-frame by audio_detect_task, so updates from
+ * app_sr_set_*() take effect on the next LISTENING window with no
+ * reboot needed. Frame cadence is 20 ms — silence_frames_cutoff is
+ * silence_ms / 20. */
+static uint64_t s_listen_max_us        = 15ULL * 1000ULL * 1000ULL;
+static uint32_t s_silence_frames_cutoff = 60;
 
 #define MODEL_MOUNT_POINT    "/srmodel"
 #define MODEL_TFLITE_PATH    MODEL_MOUNT_POINT "/hey_selene_v1.tflite"
@@ -199,13 +199,13 @@ static void audio_detect_task(void *arg)
                 silence_frames++;
             }
 
-            bool silence_cutoff  = (silence_frames >= SILENCE_FRAMES_CUTOFF);
-            bool wallclock_cutoff = (esp_timer_get_time() - detect_start_us) > LISTEN_MAX_US;
+            bool silence_cutoff  = (silence_frames >= s_silence_frames_cutoff);
+            bool wallclock_cutoff = (esp_timer_get_time() - detect_start_us) > (int64_t)s_listen_max_us;
 
             if (silence_cutoff || wallclock_cutoff) {
                 if (wallclock_cutoff && !silence_cutoff) {
-                    ESP_LOGW(TAG, "listen hit %d s wall-clock cap",
-                             (int)(LISTEN_MAX_US / 1000000));
+                    ESP_LOGW(TAG, "listen hit %lu s wall-clock cap",
+                             (unsigned long)(s_listen_max_us / 1000000ULL));
                 }
                 sr_result_t result = {
                     .wakenet_mode = WAKENET_NO_DETECT,
@@ -258,6 +258,14 @@ esp_err_t app_sr_start(bool record_en)
 
     simple_vad_reset();
 
+    /* Seed the runtime tunables from the NVS-loaded settings. Setters
+     * clamp to bounds, so bad values (e.g. stale schema) don't reach
+     * the detect loop. */
+    sys_param_t *params = settings_get_parameter();
+    app_sr_set_listen_cap_s(params->listen_cap_s);
+    app_sr_set_silence_ms(params->silence_ms);
+
+
     BaseType_t ok = xTaskCreatePinnedToCore(&audio_feed_task, "Feed Task",
         6 * 1024, NULL, 5, &g_sr_data->feed_task, 0);
     ESP_GOTO_ON_FALSE(pdPASS == ok, ESP_FAIL, err, TAG, "feed task");
@@ -306,4 +314,28 @@ esp_err_t app_sr_start_once(void)
     ESP_RETURN_ON_FALSE(NULL != g_sr_data, ESP_ERR_INVALID_STATE, TAG, "SR is not running");
     manul_detect_flag = true;
     return ESP_OK;
+}
+
+static uint32_t clamp_u32_local(uint32_t v, uint32_t lo, uint32_t hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+void app_sr_set_listen_cap_s(uint32_t seconds)
+{
+    uint32_t clamped = clamp_u32_local(seconds, LISTEN_CAP_S_MIN, LISTEN_CAP_S_MAX);
+    s_listen_max_us = (uint64_t)clamped * 1000ULL * 1000ULL;
+    ESP_LOGI(TAG, "listen cap now %lu s", (unsigned long)clamped);
+}
+
+void app_sr_set_silence_ms(uint32_t ms)
+{
+    uint32_t clamped = clamp_u32_local(ms, SILENCE_MS_MIN, SILENCE_MS_MAX);
+    /* 20 ms per frame — see CHUNK_SAMPLES. Round to nearest frame so a
+     * slider value of e.g. 1250 ms doesn't silently floor to 1240. */
+    s_silence_frames_cutoff = (clamped + 10) / 20;
+    ESP_LOGI(TAG, "silence cutoff now %lu ms (%lu frames)",
+             (unsigned long)clamped, (unsigned long)s_silence_frames_cutoff);
 }

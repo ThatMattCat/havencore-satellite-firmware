@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,6 +24,37 @@ const char *uf2_nvs_partition = "nvs";
 const char *uf2_nvs_namespace = "configuration";
 static nvs_handle_t my_handle;
 static sys_param_t g_sys_param = {0};
+
+static uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static uint32_t read_uint_str(nvs_handle_t h, const char *key,
+                              uint32_t def, uint32_t lo, uint32_t hi)
+{
+    char buf[12] = {0};
+    size_t len = sizeof(buf);
+    if (nvs_get_str(h, key, buf, &len) != ESP_OK || len == 0) {
+        return def;
+    }
+    char *end = NULL;
+    unsigned long parsed = strtoul(buf, &end, 10);
+    if (end == buf) {
+        ESP_LOGW(TAG, "%s unparseable (\"%s\") — falling back to %lu",
+                 key, buf, (unsigned long)def);
+        return def;
+    }
+    uint32_t clamped = clamp_u32((uint32_t)parsed, lo, hi);
+    if (clamped != parsed) {
+        ESP_LOGW(TAG, "%s=%lu out of range [%lu, %lu] — clamped to %lu",
+                 key, parsed, (unsigned long)lo, (unsigned long)hi,
+                 (unsigned long)clamped);
+    }
+    return clamped;
+}
 
 esp_err_t settings_factory_reset(void)
 {
@@ -130,6 +163,19 @@ esp_err_t settings_read_parameter_from_nvs(void)
     esp_err_t sid_ret = nvs_get_str(my_handle, "session_id", g_sys_param.session_id, &len);
     bool mint_session_id = (sid_ret != ESP_OK || len == 0);
 
+    /* Listen-window tunables (optional; string-typed so TinyUF2 CONFIG.INI
+     * can edit them). Parsed to uint32 and clamped to the compile-time
+     * bounds — a bad value in CONFIG.INI falls back to the default range
+     * rather than breaking listening. */
+    g_sys_param.listen_cap_s = read_uint_str(my_handle, "listen_cap_s",
+                                             LISTEN_CAP_S_DEFAULT,
+                                             LISTEN_CAP_S_MIN,
+                                             LISTEN_CAP_S_MAX);
+    g_sys_param.silence_ms = read_uint_str(my_handle, "silence_ms",
+                                           SILENCE_MS_DEFAULT,
+                                           SILENCE_MS_MIN,
+                                           SILENCE_MS_MAX);
+
     nvs_close(my_handle);
 
     /* One-time NVS migrations / cleanups requiring RW access. Safe to
@@ -183,6 +229,9 @@ esp_err_t settings_read_parameter_from_nvs(void)
     ESP_LOGI(TAG, "voice:%s wake_enabled:%u device_name:%s session_id:%s",
              g_sys_param.voice, g_sys_param.wake_enabled,
              g_sys_param.device_name, g_sys_param.session_id);
+    ESP_LOGI(TAG, "listen_cap_s:%lu silence_ms:%lu",
+             (unsigned long)g_sys_param.listen_cap_s,
+             (unsigned long)g_sys_param.silence_ms);
     return ESP_OK;
 
 err:
@@ -264,5 +313,60 @@ esp_err_t settings_set_session_id(const char *id)
 
     strlcpy(g_sys_param.session_id, id, sizeof(g_sys_param.session_id));
     ESP_LOGI(TAG, "session_id set to \"%s\"", g_sys_param.session_id);
+    return ESP_OK;
+}
+
+/* Shared NVS setter for the string-typed numeric tunables. Writes decimal
+ * form so TinyUF2 CONFIG.INI can surface and edit them. */
+static esp_err_t set_uint_str(const char *key, uint32_t value)
+{
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)value);
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open_from_partition(uf2_nvs_partition, uf2_nvs_namespace,
+                                            NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs open (rw) failed: 0x%x", ret);
+        return ret;
+    }
+
+    ret = nvs_set_str(handle, key, buf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str %s failed: 0x%x", key, ret);
+        nvs_close(handle);
+        return ret;
+    }
+
+    ret = nvs_commit(handle);
+    nvs_close(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_commit failed: 0x%x", ret);
+        return ret;
+    }
+    return ESP_OK;
+}
+
+esp_err_t settings_set_listen_cap_s(uint32_t seconds)
+{
+    uint32_t clamped = clamp_u32(seconds, LISTEN_CAP_S_MIN, LISTEN_CAP_S_MAX);
+    esp_err_t ret = set_uint_str("listen_cap_s", clamped);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    g_sys_param.listen_cap_s = clamped;
+    ESP_LOGI(TAG, "listen_cap_s set to %lu", (unsigned long)clamped);
+    return ESP_OK;
+}
+
+esp_err_t settings_set_silence_ms(uint32_t ms)
+{
+    uint32_t clamped = clamp_u32(ms, SILENCE_MS_MIN, SILENCE_MS_MAX);
+    esp_err_t ret = set_uint_str("silence_ms", clamped);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    g_sys_param.silence_ms = clamped;
+    ESP_LOGI(TAG, "silence_ms set to %lu", (unsigned long)clamped);
     return ESP_OK;
 }

@@ -8,6 +8,8 @@
 // regenerated, re-apply the Device Name block and delete the Region block.
 // See CLAUDE.md "Architecture in one pass" for details.
 
+#include <stdio.h>
+
 #include "../ui.h"
 #include "settings.h"
 
@@ -133,6 +135,104 @@ void ui_ScreenSettings_screen_init(void)
     lv_obj_set_width(ui_TextareaSettingsDeviceName, lv_pct(55));
     lv_obj_set_height(ui_TextareaSettingsDeviceName, LV_SIZE_CONTENT);
     lv_obj_add_event_cb(ui_TextareaSettingsDeviceName, ui_event_TextareaSettingsDeviceName, LV_EVENT_ALL, NULL);
+
+    /* Hand-edit: Listen Cap slider row (runtime-editable LISTEN wall-clock cap). */
+    ui_PanelSettingsListenCap = lv_obj_create(ui_PanelSettings);
+    lv_obj_set_width(ui_PanelSettingsListenCap, lv_pct(100));
+    lv_obj_set_height(ui_PanelSettingsListenCap, lv_pct(19));
+    lv_obj_set_flex_flow(ui_PanelSettingsListenCap, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ui_PanelSettingsListenCap, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(ui_PanelSettingsListenCap, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(ui_PanelSettingsListenCap, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_PanelSettingsListenCap, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_PanelSettingsListenCap, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui_PanelSettingsListenCap, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui_PanelSettingsListenCap, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui_PanelSettingsListenCap, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui_PanelSettingsListenCap, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_LabelSettingsListenCap = lv_label_create(ui_PanelSettingsListenCap);
+    lv_obj_set_width(ui_LabelSettingsListenCap, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsListenCap, LV_SIZE_CONTENT);
+    lv_label_set_text(ui_LabelSettingsListenCap, "Listen Cap");
+    lv_obj_set_style_text_color(ui_LabelSettingsListenCap, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsListenCap, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsListenCap, &ui_font_PingFangEN16, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_SliderSettingsListenCap = lv_slider_create(ui_PanelSettingsListenCap);
+    lv_slider_set_range(ui_SliderSettingsListenCap, LISTEN_CAP_S_MIN, LISTEN_CAP_S_MAX);
+    lv_slider_set_value(ui_SliderSettingsListenCap,
+                        settings_get_parameter()->listen_cap_s, LV_ANIM_OFF);
+    lv_obj_set_width(ui_SliderSettingsListenCap, lv_pct(40));
+    lv_obj_set_height(ui_SliderSettingsListenCap, 10);
+    lv_obj_add_event_cb(ui_SliderSettingsListenCap, ui_event_SliderSettingsListenCap, LV_EVENT_ALL, NULL);
+
+    ui_LabelSettingsListenCapValue = lv_label_create(ui_PanelSettingsListenCap);
+    lv_obj_set_width(ui_LabelSettingsListenCapValue, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsListenCapValue, LV_SIZE_CONTENT);
+    {
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%lus",
+                 (unsigned long)settings_get_parameter()->listen_cap_s);
+        lv_label_set_text(ui_LabelSettingsListenCapValue, buf);
+    }
+    lv_obj_set_style_text_color(ui_LabelSettingsListenCapValue, lv_color_hex(0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsListenCapValue, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsListenCapValue, &ui_font_PingFangEN16,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    /* Hand-edit: Silence Timeout slider row (runtime-editable end-of-utterance cutoff). */
+    ui_PanelSettingsSilence = lv_obj_create(ui_PanelSettings);
+    lv_obj_set_width(ui_PanelSettingsSilence, lv_pct(100));
+    lv_obj_set_height(ui_PanelSettingsSilence, lv_pct(19));
+    lv_obj_set_flex_flow(ui_PanelSettingsSilence, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ui_PanelSettingsSilence, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(ui_PanelSettingsSilence, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(ui_PanelSettingsSilence, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_PanelSettingsSilence, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_PanelSettingsSilence, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui_PanelSettingsSilence, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui_PanelSettingsSilence, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui_PanelSettingsSilence, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui_PanelSettingsSilence, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_LabelSettingsSilence = lv_label_create(ui_PanelSettingsSilence);
+    lv_obj_set_width(ui_LabelSettingsSilence, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsSilence, LV_SIZE_CONTENT);
+    lv_label_set_text(ui_LabelSettingsSilence, "Silence");
+    lv_obj_set_style_text_color(ui_LabelSettingsSilence, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsSilence, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsSilence, &ui_font_PingFangEN16, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    /* 100 ms step — the underlying cutoff is frame-quantised at 20 ms so
+     * finer steps would be visually noisy without changing behaviour. */
+    ui_SliderSettingsSilence = lv_slider_create(ui_PanelSettingsSilence);
+    lv_slider_set_range(ui_SliderSettingsSilence,
+                        SILENCE_MS_MIN / 100, SILENCE_MS_MAX / 100);
+    lv_slider_set_value(ui_SliderSettingsSilence,
+                        settings_get_parameter()->silence_ms / 100, LV_ANIM_OFF);
+    lv_obj_set_width(ui_SliderSettingsSilence, lv_pct(40));
+    lv_obj_set_height(ui_SliderSettingsSilence, 10);
+    lv_obj_add_event_cb(ui_SliderSettingsSilence, ui_event_SliderSettingsSilence, LV_EVENT_ALL, NULL);
+
+    ui_LabelSettingsSilenceValue = lv_label_create(ui_PanelSettingsSilence);
+    lv_obj_set_width(ui_LabelSettingsSilenceValue, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsSilenceValue, LV_SIZE_CONTENT);
+    {
+        char buf[12];
+        uint32_t ms = settings_get_parameter()->silence_ms;
+        snprintf(buf, sizeof(buf), "%lu.%lus",
+                 (unsigned long)(ms / 1000), (unsigned long)((ms % 1000) / 100));
+        lv_label_set_text(ui_LabelSettingsSilenceValue, buf);
+    }
+    lv_obj_set_style_text_color(ui_LabelSettingsSilenceValue, lv_color_hex(0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsSilenceValue, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsSilenceValue, &ui_font_PingFangEN16,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
 
     /* Shared on-screen keyboard. Parented to the screen (not the row panel)
      * so it can span the full width and float above other widgets. Hidden

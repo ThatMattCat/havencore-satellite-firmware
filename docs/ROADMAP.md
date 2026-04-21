@@ -4,20 +4,21 @@ Tracks known issues, deferred work, and planned improvements. MVP scope
 (touch + "Hey Selene" → STT → chat → TTS → playback, with status UI and
 NVS provisioning) has landed; this doc captures what's left on top.
 
-## Current status (2026-04-18)
+## Current status (2026-04-21)
 
-Device #1 running the microWakeWord-migration branch against
+Both BOX-3 devices running the `updates` branch against
 `http://selene.renman.wtf`. Full turn round-trip (tap → STT → chat → TTS)
 has been exercised. UF2 factory-reset flow repaired 2026-04-18: Settings →
 factory-reset now switches boot to `ota_0` and the TinyUF2 app mounts a
-USB drive for editing `CONFIG.INI`. Device #2 still needs a one-time
-`scripts/bootstrap_ota0.sh` pass before it can use the new flow.
+USB drive for editing `CONFIG.INI`. Listen-window tunables (`listen_cap_s`,
+`silence_ms`) shipped 2026-04-21 as user-editable Settings sliders, verified
+live on hardware on both devices.
 
 What's working:
 - Boot, PSRAM init, LVGL start, GT911 touch init (BSP patch applied).
 - Wi-Fi + DHCP + three boot health probes (`/api/status`, `/api/stt/health`,
   `/api/tts/health`) all return 200 against `selene.renman.wtf`.
-- NVS reads `ssid / password / Base_url / voice / wake_enabled / device_name / session_id`.
+- NVS reads `ssid / password / Base_url / voice / wake_enabled / device_name / session_id / listen_cap_s / silence_ms`.
 - Chat traffic is on the first-party `/api/chat` endpoint (HTTP timeout 60 s). Verified 2026-04-18: full turn (wake → STT → `/api/chat` → TTS → playback) completes with `/api/chat` round-trip ≈ 1.1 s against `selene.renman.wtf`.
 - `X-Session-Id` is an NVS-persisted random 32-char hex blob minted on first boot and stable across reboots (verified 2026-04-18). Server-initiated rotation via the `X-Session-Id` response header is wired (`on_session_rotated` → `settings_set_session_id`) but not yet exercised on hardware — needs an LRU eviction / server restart to force a new id.
 - `build_url()` strips a trailing `/v1/` (one-shot warning) — keep it out of
@@ -90,14 +91,6 @@ Tunables we still need to surface: `probability_cutoff`,
 `sliding_window_size`, `tensor_arena_size` come from the manifest JSON;
 the Python training pipeline owns those. Nothing to do on the firmware
 side unless we want to override per-device.
-
-### Configurable 15 s cap / silence threshold
-
-Neither constant is exposed via NVS yet. Add as optional keys when the defaults prove wrong in practice.
-
-### mDNS discovery of `havencore.local`
-
-`Base_url` is stored verbatim. If the host uses `.local`, lwip mDNS resolution has to be enabled in sdkconfig. Currently we rely on the router's DNS or a static IP in the URL. Cheap add — enable `CONFIG_LWIP_USE_MDNS_RESOLVER=y` when it becomes an issue.
 
 ### Barge-in / AEC
 
