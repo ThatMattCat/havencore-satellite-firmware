@@ -161,11 +161,38 @@ err:
 
 /* play audio function */
 
+/* Set by the tap-to-barge path before calling audio_player_stop() so the
+ * forced playback-end doesn't arm a follow-up window — the tap is itself
+ * the next turn. One-shot: cleared inside audio_play_finish_cb. */
+static volatile bool s_suppress_follow_up = false;
+
+void app_suppress_follow_up_once(void)
+{
+    s_suppress_follow_up = true;
+}
+
 static void audio_play_finish_cb(void)
 {
     ESP_LOGI(TAG, "tts playback done");
     if (ui_ctrl_reply_get_audio_start_flag()) {
         ui_ctrl_reply_set_audio_end_flag(true);
+    }
+
+    bool suppress = s_suppress_follow_up;
+    s_suppress_follow_up = false;
+    if (suppress) {
+        return;
+    }
+
+    /* Arm conversational follow-up (or fall to IDLE if disabled).
+     * Playback truly ended → push the FSM forward; today nothing else
+     * does (the scroll-timer panel revert is cosmetic only). */
+    uint32_t follow_up_ms = sys_param ? sys_param->follow_up_ms : 0;
+    if (follow_up_ms > 0) {
+        sat_state_set(SAT_STATE_LISTENING);
+        app_sr_start_follow_up_window(follow_up_ms);
+    } else {
+        sat_state_set(SAT_STATE_IDLE);
     }
 }
 

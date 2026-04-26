@@ -24,6 +24,10 @@
 #define SILENCE_MS_MIN     300
 #define SILENCE_MS_MAX     3000
 
+#define FOLLOW_UP_MS_DEFAULT 5000
+#define FOLLOW_UP_MS_MIN     0
+#define FOLLOW_UP_MS_MAX     15000
+
 typedef struct {
     char ssid[SSID_SIZE];             /* SSID of target AP. */
     char password[PASSWORD_SIZE];     /* Password of target AP. */
@@ -34,6 +38,7 @@ typedef struct {
     char session_id[SESSION_ID_SIZE]; /* Random hex blob minted on first boot; rotated by server. */
     uint32_t listen_cap_s;            /* LISTENING wall-clock cap in seconds. Bounds [5, 60]. */
     uint32_t silence_ms;              /* End-of-utterance silence in milliseconds. Bounds [300, 3000]. */
+    uint32_t follow_up_ms;            /* Conversational follow-up window in ms after AI playback. 0 disables. Bounds [0, 15000]. */
 } sys_param_t;
 
 esp_err_t settings_factory_reset(void);
@@ -43,3 +48,4 @@ esp_err_t settings_set_device_name(const char *name);
 esp_err_t settings_set_session_id(const char *id);
 esp_err_t settings_set_listen_cap_s(uint32_t seconds);
 esp_err_t settings_set_silence_ms(uint32_t ms);
+esp_err_t settings_set_follow_up_ms(uint32_t ms);

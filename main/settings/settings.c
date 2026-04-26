@@ -175,6 +175,10 @@ esp_err_t settings_read_parameter_from_nvs(void)
                                            SILENCE_MS_DEFAULT,
                                            SILENCE_MS_MIN,
                                            SILENCE_MS_MAX);
+    g_sys_param.follow_up_ms = read_uint_str(my_handle, "follow_up_ms",
+                                             FOLLOW_UP_MS_DEFAULT,
+                                             FOLLOW_UP_MS_MIN,
+                                             FOLLOW_UP_MS_MAX);
 
     nvs_close(my_handle);
 
@@ -229,9 +233,10 @@ esp_err_t settings_read_parameter_from_nvs(void)
     ESP_LOGI(TAG, "voice:%s wake_enabled:%u device_name:%s session_id:%s",
              g_sys_param.voice, g_sys_param.wake_enabled,
              g_sys_param.device_name, g_sys_param.session_id);
-    ESP_LOGI(TAG, "listen_cap_s:%lu silence_ms:%lu",
+    ESP_LOGI(TAG, "listen_cap_s:%lu silence_ms:%lu follow_up_ms:%lu",
              (unsigned long)g_sys_param.listen_cap_s,
-             (unsigned long)g_sys_param.silence_ms);
+             (unsigned long)g_sys_param.silence_ms,
+             (unsigned long)g_sys_param.follow_up_ms);
     return ESP_OK;
 
 err:
@@ -368,5 +373,17 @@ esp_err_t settings_set_silence_ms(uint32_t ms)
     }
     g_sys_param.silence_ms = clamped;
     ESP_LOGI(TAG, "silence_ms set to %lu", (unsigned long)clamped);
+    return ESP_OK;
+}
+
+esp_err_t settings_set_follow_up_ms(uint32_t ms)
+{
+    uint32_t clamped = clamp_u32(ms, FOLLOW_UP_MS_MIN, FOLLOW_UP_MS_MAX);
+    esp_err_t ret = set_uint_str("follow_up_ms", clamped);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    g_sys_param.follow_up_ms = clamped;
+    ESP_LOGI(TAG, "follow_up_ms set to %lu", (unsigned long)clamped);
     return ESP_OK;
 }

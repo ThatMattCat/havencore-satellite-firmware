@@ -234,6 +234,61 @@ void ui_ScreenSettings_screen_init(void)
     lv_obj_set_style_text_font(ui_LabelSettingsSilenceValue, &ui_font_PingFangEN16,
                                LV_PART_MAIN | LV_STATE_DEFAULT);
 
+    /* Hand-edit: Follow-Up window slider row (post-playback no-wake-word
+     * listen window). 0 = disabled. */
+    ui_PanelSettingsFollowUp = lv_obj_create(ui_PanelSettings);
+    lv_obj_set_width(ui_PanelSettingsFollowUp, lv_pct(100));
+    lv_obj_set_height(ui_PanelSettingsFollowUp, lv_pct(19));
+    lv_obj_set_flex_flow(ui_PanelSettingsFollowUp, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ui_PanelSettingsFollowUp, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(ui_PanelSettingsFollowUp, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(ui_PanelSettingsFollowUp, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_PanelSettingsFollowUp, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_PanelSettingsFollowUp, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui_PanelSettingsFollowUp, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui_PanelSettingsFollowUp, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui_PanelSettingsFollowUp, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui_PanelSettingsFollowUp, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_LabelSettingsFollowUp = lv_label_create(ui_PanelSettingsFollowUp);
+    lv_obj_set_width(ui_LabelSettingsFollowUp, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsFollowUp, LV_SIZE_CONTENT);
+    lv_label_set_text(ui_LabelSettingsFollowUp, "Follow-Up");
+    lv_obj_set_style_text_color(ui_LabelSettingsFollowUp, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsFollowUp, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsFollowUp, &ui_font_PingFangEN16, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    /* 1 s step. Range 0..15 — 0 displays as "Off" and disables the
+     * follow-up window entirely (back to "Hey Selene" required). */
+    ui_SliderSettingsFollowUp = lv_slider_create(ui_PanelSettingsFollowUp);
+    lv_slider_set_range(ui_SliderSettingsFollowUp,
+                        FOLLOW_UP_MS_MIN / 1000, FOLLOW_UP_MS_MAX / 1000);
+    lv_slider_set_value(ui_SliderSettingsFollowUp,
+                        settings_get_parameter()->follow_up_ms / 1000, LV_ANIM_OFF);
+    lv_obj_set_width(ui_SliderSettingsFollowUp, lv_pct(40));
+    lv_obj_set_height(ui_SliderSettingsFollowUp, 10);
+    lv_obj_add_event_cb(ui_SliderSettingsFollowUp, ui_event_SliderSettingsFollowUp, LV_EVENT_ALL, NULL);
+
+    ui_LabelSettingsFollowUpValue = lv_label_create(ui_PanelSettingsFollowUp);
+    lv_obj_set_width(ui_LabelSettingsFollowUpValue, LV_SIZE_CONTENT);
+    lv_obj_set_height(ui_LabelSettingsFollowUpValue, LV_SIZE_CONTENT);
+    {
+        uint32_t s = settings_get_parameter()->follow_up_ms / 1000;
+        if (s == 0) {
+            lv_label_set_text(ui_LabelSettingsFollowUpValue, "Off");
+        } else {
+            char buf[12];
+            snprintf(buf, sizeof(buf), "%lus", (unsigned long)s);
+            lv_label_set_text(ui_LabelSettingsFollowUpValue, buf);
+        }
+    }
+    lv_obj_set_style_text_color(ui_LabelSettingsFollowUpValue, lv_color_hex(0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_LabelSettingsFollowUpValue, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelSettingsFollowUpValue, &ui_font_PingFangEN16,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+
     /* Shared on-screen keyboard. Parented to the screen (not the row panel)
      * so it can span the full width and float above other widgets. Hidden
      * until the textarea is focused. */

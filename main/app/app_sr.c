@@ -39,6 +39,7 @@
 #include "simple_vad.h"
 #include "microwakeword.h"
 #include "settings.h"
+#include "state.h"
 
 static const char *TAG = "app_sr";
 
@@ -61,6 +62,18 @@ static uint32_t s_silence_frames_cutoff = 60;
 #define MODEL_JSON_PATH      MODEL_MOUNT_POINT "/hey_selene_v1.json"
 
 static bool manul_detect_flag = false;
+/* Conversational follow-up window: when > 0 and current time has not
+ * passed it, audio_detect_task triggers a record on the next VAD
+ * speech-onset *without* requiring the wake word. Set/cleared via
+ * app_sr_start_follow_up_window / app_sr_cancel_follow_up_window. */
+static volatile int64_t s_follow_up_deadline_us = 0;
+/* Minimum silence frames observed inside the window before we'll honour
+ * a SPEECH state — prevents post-playback acoustic tail / I2S RX residue
+ * from instantly firing the trigger. ~6 frames * 20 ms = 120 ms. */
+#define FOLLOW_UP_SILENCE_FRAMES_REQ 6
+/* And require a couple of consecutive SPEECH frames so a single noisy
+ * sample doesn't fire either. */
+#define FOLLOW_UP_SPEECH_FRAMES_REQ  2
 sr_data_t *g_sr_data = NULL;
 
 extern bool record_flag;
@@ -143,6 +156,11 @@ static void audio_detect_task(void *arg)
     int64_t detect_start_us = 0;
     int     silence_frames = 0;
     bool    seen_speech    = false;
+    /* Per-window follow-up tracking. Reset whenever the deadline goes
+     * from 0 -> non-zero (window armed). */
+    int64_t fu_last_deadline_us  = 0;
+    int     fu_silence_run       = 0;
+    int     fu_speech_run        = 0;
 
     while (true) {
         if (NEED_DELETE && xEventGroupGetBits(g_sr_data->event_group)) {
@@ -152,7 +170,9 @@ static void audio_detect_task(void *arg)
         }
 
         /* Either trigger enters LISTENING. Wake-word path is gated by
-         * wake_word_enabled() exactly as before. */
+         * wake_word_enabled() exactly as before. The follow-up window
+         * adds a third path: when armed, any VAD speech-onset triggers
+         * a record without requiring the wake word. */
         bool triggered = false;
 
         if (wake_word_enabled() && mww_poll_detected()) {
@@ -162,6 +182,51 @@ static void audio_detect_task(void *arg)
         if (manul_detect_flag) {
             manul_detect_flag = false;
             triggered = true;
+        }
+
+        /* Follow-up window: wait for a real silence -> speech transition
+         * inside the window before firing. Acoustic tail from the just-
+         * completed playback (or stale samples in the I2S RX buffer)
+         * can leave the VAD in SPEECH at the moment we arm, so we
+         * require N consecutive silence frames first, then N consecutive
+         * speech frames. Window expiry without that transition returns
+         * the device to IDLE without uploading. */
+        if (!triggered && !detect_flag && s_follow_up_deadline_us > 0) {
+            int64_t now_us = esp_timer_get_time();
+            if (s_follow_up_deadline_us != fu_last_deadline_us) {
+                fu_last_deadline_us = s_follow_up_deadline_us;
+                fu_silence_run = 0;
+                fu_speech_run  = 0;
+            }
+            if (now_us >= s_follow_up_deadline_us) {
+                ESP_LOGI(TAG, "follow-up window expired; back to IDLE");
+                s_follow_up_deadline_us = 0;
+                fu_last_deadline_us = 0;
+                fu_silence_run = 0;
+                fu_speech_run  = 0;
+                sat_state_set(SAT_STATE_IDLE);
+            } else {
+                simple_vad_state_t fvs = simple_vad_state();
+                if (fvs == SIMPLE_VAD_SILENCE) {
+                    if (fu_silence_run < FOLLOW_UP_SILENCE_FRAMES_REQ) {
+                        fu_silence_run++;
+                    }
+                    fu_speech_run = 0;
+                } else { /* SPEECH */
+                    if (fu_silence_run >= FOLLOW_UP_SILENCE_FRAMES_REQ) {
+                        fu_speech_run++;
+                        if (fu_speech_run >= FOLLOW_UP_SPEECH_FRAMES_REQ) {
+                            ESP_LOGI(TAG, "follow-up speech-onset; entering listen");
+                            s_follow_up_deadline_us = 0;
+                            fu_last_deadline_us = 0;
+                            fu_silence_run = 0;
+                            fu_speech_run  = 0;
+                            triggered = true;
+                        }
+                    }
+                    /* SPEECH before settling: hold off. */
+                }
+            }
         }
 
         if (triggered && !detect_flag) {
@@ -338,4 +403,35 @@ void app_sr_set_silence_ms(uint32_t ms)
     s_silence_frames_cutoff = (clamped + 10) / 20;
     ESP_LOGI(TAG, "silence cutoff now %lu ms (%lu frames)",
              (unsigned long)clamped, (unsigned long)s_silence_frames_cutoff);
+}
+
+void app_sr_start_follow_up_window(uint32_t timeout_ms)
+{
+    if (timeout_ms == 0) {
+        s_follow_up_deadline_us = 0;
+        return;
+    }
+    /* Keep simple_vad's adapted noise floor — calling simple_vad_reset()
+     * here would slam it back to NOISE_INIT (60), dropping the speech
+     * threshold to ~240 RMS and letting normal room noise instantly
+     * fire the trigger. The audio_detect_task follow-up branch enforces
+     * silence-first + N-consecutive-speech-frames, which already filters
+     * stale-state from playback bleed. */
+    simple_vad_set_floor_locked(false);
+    s_follow_up_deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    ESP_LOGI(TAG, "follow-up window armed for %lu ms", (unsigned long)timeout_ms);
+}
+
+void app_sr_cancel_follow_up_window(void)
+{
+    if (s_follow_up_deadline_us != 0) {
+        ESP_LOGI(TAG, "follow-up window cancelled");
+    }
+    s_follow_up_deadline_us = 0;
+}
+
+bool app_sr_follow_up_active(void)
+{
+    return s_follow_up_deadline_us > 0
+        && esp_timer_get_time() < s_follow_up_deadline_us;
 }

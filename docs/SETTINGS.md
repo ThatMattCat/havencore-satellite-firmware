@@ -35,6 +35,7 @@ The in-memory mirror is a single `sys_param_t` struct
 | `session_id` | str | 40 | no | *(minted at first boot)* | `settings_read_parameter_from_nvs()` first-boot mint; rewritten by `settings_set_session_id()` on server rotation | `X-Session-Id` header on every HavenCore request |
 | `listen_cap_s` | str | 12 | no | `"15"` (bounds 5–60) | Settings screen slider OR UF2 CONFIG.INI | `app_sr.c` LISTEN wall-clock cutoff |
 | `silence_ms` | str | 12 | no | `"1200"` (bounds 300–3000) | Settings screen slider OR UF2 CONFIG.INI | `app_sr.c` end-of-utterance silence cutoff |
+| `follow_up_ms` | str | 12 | no | `"5000"` (bounds 0–15000, 0 disables) | Settings screen slider OR UF2 CONFIG.INI | `main.c:audio_play_finish_cb` — arms a no-wake-word listen window after AI playback |
 
 TinyUF2's CONFIG.INI interface only exposes string-typed NVS keys — that's why `wake_enabled` is stored as `"0"`/`"1"` rather than a `u8`. Legacy u8-typed values from older firmware are auto-migrated to string on boot (`settings.c` migration block). The upstream `chatgpt_demo` `ChatGPT_key` is also erased on boot so it stops appearing in CONFIG.INI.
 
@@ -61,7 +62,7 @@ settings: stored ssid:...
 settings: stored password:...
 settings: stored Base URL:...
 settings: voice:af_heart wake_enabled:1 device_name:Satellite session_id:<32 hex chars>
-settings: listen_cap_s:15 silence_ms:1200
+settings: listen_cap_s:15 silence_ms:1200 follow_up_ms:5000
 ```
 
 ## Write path
@@ -241,19 +242,22 @@ If you must regenerate, re-apply in order:
 1. In `ui_ScreenSettings.c`: the `ui_PanelSettingsDeviceName` +
    `ui_LabelSettingsDeviceName` + `ui_TextareaSettingsDeviceName`
    block, the `ui_PanelSettingsListenCap` + slider + value-label block,
-   the `ui_PanelSettingsSilence` + slider + value-label block, and the
+   the `ui_PanelSettingsSilence` + slider + value-label block, the
+   `ui_PanelSettingsFollowUp` + slider + value-label block, and the
    `ui_KeyboardSettings` block; delete any Region widgets the
    regenerator brings back; swap the event-cb registration from
    `ui_DropdownSettingsRegion` to nothing (the textarea and sliders
    register their own handlers inline).
 2. In `ui.c`: `ui_event_TextareaSettingsDeviceName`,
    `ui_event_KeyboardSettings`, `ui_event_SliderSettingsListenCap`,
-   and `ui_event_SliderSettingsSilence` handlers; the
+   `ui_event_SliderSettingsSilence`, and
+   `ui_event_SliderSettingsFollowUp` handlers; the
    `havencore_client.h` / `settings.h` / `app_sr.h` includes; and
    the keyboard-hide lines inside `ui_event_ImageSettingsBack`.
 3. In `ui.h`: swap the `ui_*Region*` externs for the Device Name,
    Listen Cap (panel + label + slider + value label), Silence
-   (panel + label + slider + value label), and Keyboard externs.
+   (panel + label + slider + value label), Follow-Up (panel + label
+   + slider + value label), and Keyboard externs.
 
 Long-term fix: open `chat_gpt.spj` in SquareLine, delete Region, add
 Device Name + Keyboard, and commit the updated `.spj` so regeneration

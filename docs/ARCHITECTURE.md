@@ -77,11 +77,15 @@ audio_feed_task (app_sr.c, pinned core 0)
     fans out: mww_feed_pcm() + simple_vad_feed() + audio_record_save()
 
 audio_detect_task (app_sr.c, pinned core 1)
-    polls at 20 ms. Either mww_poll_detected() [gated by wake_word_enabled()]
-      or manul_detect_flag flips detect_flag=true and posts WAKENET_DETECTED.
+    polls at 20 ms. Three triggers post WAKENET_DETECTED:
+      - mww_poll_detected()  [gated by wake_word_enabled()]
+      - manul_detect_flag    [tap-to-talk]
+      - follow-up window     [silence-first + N-consecutive-speech VAD onset
+                              while s_follow_up_deadline_us is in the future,
+                              armed by audio_play_finish_cb]
     Locks simple_vad's noise floor for the listen window.
-    Ends the window when either 60 silence frames (≈1.2 s) after the first
-      SPEECH frame, or 15 s wall-clock — posts ESP_MN_STATE_TIMEOUT.
+    Ends the window when either silence_ms of silence after the first
+      SPEECH frame, or listen_cap_s wall-clock — posts ESP_MN_STATE_TIMEOUT.
 
 sr_handler_task (app_audio.c, pinned core 0)
     on WAKENET_DETECTED: audio_record_start(), sat_state_set(LISTENING)
@@ -93,7 +97,15 @@ start_havencore_turn (main.c)
     sat_state_set(THINKING);   havencore_chat  -> reply
     sat_state_set(SPEAKING);   havencore_tts   -> tts_wav
     audio_player_play(fmemopen(tts_wav, ...))
-    audio_player idle callback -> sat_state_set(IDLE) via ui_ctrl_reply_set_audio_end_flag
+    audio_player IDLE callback -> audio_play_finish_cb (main.c)
+        if follow_up_ms > 0 (and not suppressed by tap-barge):
+            sat_state_set(LISTENING) + app_sr_start_follow_up_window(ms)
+        else:
+            sat_state_set(IDLE)
+    Tap during SPEAKING: app_suppress_follow_up_once() + audio_player_stop()
+        forces an immediate playback IDLE; the suppression flag prevents
+        the follow-up window from auto-arming since the tap is the next
+        turn's wake. The existing manul_detect_flag path takes over.
 
 Any leg returning non-OK -> debug_overlay_set_last_error(msg) + sat_state_set(ERROR)
 ERROR transitions show a dedicated UI_CTRL_PANEL_ERROR with a 3 s countdown
@@ -106,14 +118,16 @@ before auto-returning to IDLE.
 
 | State        | UI panel             | How we enter                             |
 | ------------ | -------------------- | ---------------------------------------- |
-| IDLE         | `UI_CTRL_PANEL_SLEEP`| boot, end of turn, post-error timeout    |
-| LISTENING    | `UI_CTRL_PANEL_LISTEN`| tap-to-talk triggers `sr_handler_task`  |
+| IDLE         | `UI_CTRL_PANEL_SLEEP`| boot, post-playback when `follow_up_ms == 0`, follow-up timeout, post-error timeout |
+| LISTENING    | `UI_CTRL_PANEL_LISTEN`| tap, "Hey Selene", or post-playback follow-up window arm |
 | UPLOADING    | `UI_CTRL_PANEL_GET`  | VAD silence → start_havencore_turn starts |
 | THINKING     | `UI_CTRL_PANEL_GET`  | STT completes                            |
 | SPEAKING     | `UI_CTRL_PANEL_REPLY`| chat completes, before TTS request       |
 | ERROR        | `UI_CTRL_PANEL_ERROR` (3 s countdown) | any HTTP failure along the turn |
 
 Wake-word is gated at the source in `audio_detect_task`: `mww_poll_detected()` only triggers a LISTENING transition when `wake_word_enabled()` returns true. The feed path keeps calling `mww_feed_pcm()` unconditionally — skipping feeds while listening would tear the streaming model's hidden state. The manual-trigger path (touch → `manul_detect_flag`) is always on and re-uses the same detect-flag flow, so touch-to-talk works even if `wake_word_enabled()` returns false.
+
+The follow-up window adds a third no-wake-word trigger that's open only while `s_follow_up_deadline_us > now`, armed by `audio_play_finish_cb` after a successful TTS playback. To suppress false fires from playback acoustic tail / I2S RX residue, the trigger requires a true silence→speech transition: at least `FOLLOW_UP_SILENCE_FRAMES_REQ` consecutive `SIMPLE_VAD_SILENCE` frames before any `SIMPLE_VAD_SPEECH` is honoured, and then `FOLLOW_UP_SPEECH_FRAMES_REQ` consecutive SPEECH frames before firing. **Do not call `simple_vad_reset()` mid-session** — it slams the noise floor back to `NOISE_INIT` (60), drops the speech threshold to ~240 RMS, and lets ambient room noise instantly trigger SPEECH; preserve the adapted floor across re-arms. See ROADMAP "Follow-up onset tuning" for the post-mortem.
 
 ## HTTP client contracts
 

@@ -4,7 +4,7 @@ Tracks known issues, deferred work, and planned improvements. MVP scope
 (touch + "Hey Selene" → STT → chat → TTS → playback, with status UI and
 NVS provisioning) has landed; this doc captures what's left on top.
 
-## Current status (2026-04-21)
+## Current status (2026-04-26)
 
 Both BOX-3 devices running the `updates` branch against
 `http://selene.renman.wtf`. Full turn round-trip (tap → STT → chat → TTS)
@@ -13,6 +13,44 @@ factory-reset now switches boot to `ota_0` and the TinyUF2 app mounts a
 USB drive for editing `CONFIG.INI`. Listen-window tunables (`listen_cap_s`,
 `silence_ms`) shipped 2026-04-21 as user-editable Settings sliders, verified
 live on hardware on both devices.
+
+Conversational follow-up window + tap-to-barge shipped 2026-04-26:
+`audio_play_finish_cb` arms a no-wake-word listen window (default 5 s,
+NVS key `follow_up_ms`, bounds 0–15 s) once TTS playback ends — any VAD
+speech-onset within the window starts a fresh capture, silent expiry
+returns to IDLE without uploading. A screen tap during SPEAKING calls
+`audio_player_stop()` and starts a new turn. **Voice barge-in (speak to
+interrupt playback) remains deferred** — it shares the AEC blocker with
+the existing barge-in / AEC entry below.
+
+### Follow-up onset tuning
+
+Onset detection inside the follow-up window requires **silence-first +
+N-consecutive-speech frames** (constants `FOLLOW_UP_SILENCE_FRAMES_REQ`
+= 6 frames / 120 ms and `FOLLOW_UP_SPEECH_FRAMES_REQ` = 2 frames / 40 ms
+in `main/app/app_sr.c`). This was needed because the first iteration
+fired the trigger as soon as `simple_vad_state() == SIMPLE_VAD_SPEECH`,
+which produced a runaway loop (TTS reply → arm window → instant false
+trigger → empty STT → "thank you" default → TTS → …). Two pitfalls,
+both worth knowing for any future "open-the-mic-after-X" feature:
+
+- **`simple_vad_reset()` is a footgun mid-session.** It slams
+  `noise_floor` back to `NOISE_INIT` (60), which drops the speech
+  threshold (`noise_floor * 4`) to ~240 RMS — well below typical room
+  noise on a BOX-3, so SPEECH fires on the very next frame. Original
+  arming code called it to "clear stale state"; removing the call
+  (preserving the adapted floor) was the actual fix. Header doc on
+  `simple_vad_reset()` now warns about this.
+- **Acoustic tail + I2S RX residue keeps SPEECH latched right after
+  playback ends.** Even with a sane floor, the VAD often reports SPEECH
+  on the first few frames of the window. Requiring N silence frames
+  before honouring SPEECH filters this out without needing a hard
+  delay/sleep at arm time.
+
+If a similar feature regresses, look first at: (a) is something
+resetting the noise floor when it shouldn't, and (b) does the consumer
+require a true silence→speech *transition* or just current-state
+SPEECH.
 
 What's working:
 - Boot, PSRAM init, LVGL start, GT911 touch init (BSP patch applied).
@@ -92,14 +130,17 @@ Tunables we still need to surface: `probability_cutoff`,
 the Python training pipeline owns those. Nothing to do on the firmware
 side unless we want to override per-device.
 
-### Barge-in / AEC
+### Voice barge-in / AEC
 
-Explicitly out of MVP scope. ESP-SR's AFE (which provided an
-AEC hook) was removed in the microWakeWord migration, so there's no
-existing echo-cancel plumbing to enable — we'd need to bring AEC back in
-as a standalone component, re-routing the I2S TX buffer back into it as
-the echo reference. Nontrivial, costs CPU, and BOX-3 speaker loudness
-usually clips the mics anyway.
+Tap-to-barge shipped 2026-04-26 (see Current status). What's still
+deferred is **voice** barge-in — letting the user speak to interrupt
+playback. ESP-SR's AFE (which provided an AEC hook) was removed in the
+microWakeWord migration, so there's no existing echo-cancel plumbing to
+enable: `audio_feed_task` runs unconditionally during SPEAKING and the
+mic stream is the speaker output blended with the user. We'd need to
+bring AEC back in as a standalone component, re-routing the I2S TX
+buffer back into it as the echo reference. Nontrivial, costs CPU, and
+BOX-3 speaker loudness usually clips the mics anyway.
 
 ### SSE streaming of `/v1/chat/completions`
 
