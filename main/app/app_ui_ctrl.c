@@ -9,6 +9,7 @@
 #include "app_ui_ctrl.h"
 #include "app_wifi.h"
 #include "debug_overlay.h"
+#include "state.h"
 #include "bsp/esp-bsp.h"
 
 #include "ui_helpers.h"
@@ -411,7 +412,13 @@ static void reply_content_scroll_timer_handler()
             reply_audio_start = false;
             reply_audio_end = false;
             lv_timer_pause(scroll_timer_handle);
-            ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 1000);
+            /* Only auto-revert to SLEEP when the FSM is actually idle.
+             * After a follow-up window is armed (state == LISTENING) or
+             * the user has bargeed-in (state == LISTENING/UPLOADING/etc.),
+             * leave the panel where it is — the active state owns it. */
+            if (sat_state_get() == SAT_STATE_IDLE) {
+                ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 1000);
+            }
         }
     }
 }

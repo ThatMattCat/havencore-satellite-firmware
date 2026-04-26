@@ -62,6 +62,20 @@ esp_err_t app_sr_stop(void);
 esp_err_t app_sr_get_result(sr_result_t *result, TickType_t xTicksToWait);
 esp_err_t app_sr_start_once(void);
 
+/* Live-update hooks for the listen-window tunables. Values are clamped
+ * internally; pass the user-facing units (seconds, milliseconds). The
+ * change takes effect on the next LISTENING frame — no reboot needed. */
+void app_sr_set_listen_cap_s(uint32_t seconds);
+void app_sr_set_silence_ms(uint32_t ms);
+
+/* Conversational follow-up window. Arms a time-bounded gate inside
+ * audio_detect_task so that a fresh speech-onset within the window starts
+ * a recording without requiring the wake word. If the window expires
+ * with no speech, the device returns to IDLE and no upload is made. */
+void app_sr_start_follow_up_window(uint32_t timeout_ms);
+void app_sr_cancel_follow_up_window(void);
+bool app_sr_follow_up_active(void);
+
 #ifdef __cplusplus
 }
 #endif

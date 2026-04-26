@@ -8,10 +8,17 @@
 #include "ui.h"
 #include "app_ui_ctrl.h"
 #include "settings.h"
+#include "state.h"
+#include "audio_player.h"
 #include "esp_system.h"
 #include "esp_log.h"
 
 static char *TAG = "ui-events";
+
+/* Set the one-shot suppression flag in main.c so the forced playback-end
+ * triggered by audio_player_stop() does not arm a follow-up window — the
+ * tap is itself the start of the next turn. */
+extern void app_suppress_follow_up_once(void);
 
 void EventBtnSetupClick(lv_event_t *e)
 {
@@ -21,7 +28,19 @@ void EventBtnSetupClick(lv_event_t *e)
 
 void EventPanelSleepClickCb(lv_event_t *e)
 {
-    // Your code here
+    /* Tap-to-barge: if the AI is currently speaking, cut playback so the
+     * new turn can start cleanly. If a follow-up window is open, cancel
+     * it — both the window's pending speech-onset trigger and the tap
+     * would otherwise queue back-to-back WAKENET_DETECTED events. */
+    sat_state_t s = sat_state_get();
+    if (s == SAT_STATE_SPEAKING) {
+        app_suppress_follow_up_once();
+        audio_player_stop();
+        ESP_LOGI(TAG, "barge: stopping playback");
+    } else if (app_sr_follow_up_active()) {
+        app_sr_cancel_follow_up_window();
+    }
+
     app_sr_start_once();
     ESP_LOGI(TAG, "sr start once");
 }

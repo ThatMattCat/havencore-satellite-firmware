@@ -7,6 +7,7 @@
 #include "ui_helpers.h"
 #include "havencore_client.h"
 #include "settings.h"
+#include "app_sr.h"
 #include <stdio.h>
 
 ///////////////////// VARIABLES ////////////////////
@@ -88,6 +89,21 @@ void ui_event_TextareaSettingsDeviceName(lv_event_t *e);
 lv_obj_t *ui_TextareaSettingsDeviceName;
 void ui_event_KeyboardSettings(lv_event_t *e);
 lv_obj_t *ui_KeyboardSettings;
+lv_obj_t *ui_PanelSettingsListenCap;
+lv_obj_t *ui_LabelSettingsListenCap;
+void ui_event_SliderSettingsListenCap(lv_event_t *e);
+lv_obj_t *ui_SliderSettingsListenCap;
+lv_obj_t *ui_LabelSettingsListenCapValue;
+lv_obj_t *ui_PanelSettingsSilence;
+lv_obj_t *ui_LabelSettingsSilence;
+void ui_event_SliderSettingsSilence(lv_event_t *e);
+lv_obj_t *ui_SliderSettingsSilence;
+lv_obj_t *ui_LabelSettingsSilenceValue;
+lv_obj_t *ui_PanelSettingsFollowUp;
+lv_obj_t *ui_LabelSettingsFollowUp;
+void ui_event_SliderSettingsFollowUp(lv_event_t *e);
+lv_obj_t *ui_SliderSettingsFollowUp;
+lv_obj_t *ui_LabelSettingsFollowUpValue;
 void ui_event_ImageSettingsBack(lv_event_t *e);
 lv_obj_t *ui_ImageSettingsBack;
 void ui_event_ImageSettingsReset(lv_event_t *e);
@@ -334,6 +350,71 @@ void ui_event_KeyboardSettings(lv_event_t *e)
         if (ui_TextareaSettingsDeviceName) {
             lv_obj_clear_state(ui_TextareaSettingsDeviceName, LV_STATE_FOCUSED);
         }
+    }
+}
+
+void ui_event_SliderSettingsListenCap(lv_event_t *e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    lv_obj_t *slider = lv_event_get_target(e);
+
+    if (event_code == LV_EVENT_VALUE_CHANGED) {
+        int32_t seconds = lv_slider_get_value(slider);
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%ds", (int)seconds);
+        lv_label_set_text(ui_LabelSettingsListenCapValue, buf);
+    } else if (event_code == LV_EVENT_RELEASED) {
+        uint32_t seconds = (uint32_t)lv_slider_get_value(slider);
+        /* Persist + push to the running detector in one shot. Setters
+         * clamp independently so a mismatched slider range still stays
+         * within bounds. */
+        if (settings_set_listen_cap_s(seconds) == ESP_OK) {
+            app_sr_set_listen_cap_s(seconds);
+        }
+    }
+}
+
+void ui_event_SliderSettingsSilence(lv_event_t *e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    lv_obj_t *slider = lv_event_get_target(e);
+
+    if (event_code == LV_EVENT_VALUE_CHANGED) {
+        /* Slider stores ms/100; format as "X.Ys". */
+        int32_t deci = lv_slider_get_value(slider);
+        uint32_t ms = (uint32_t)deci * 100;
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%lu.%lus",
+                 (unsigned long)(ms / 1000), (unsigned long)((ms % 1000) / 100));
+        lv_label_set_text(ui_LabelSettingsSilenceValue, buf);
+    } else if (event_code == LV_EVENT_RELEASED) {
+        uint32_t ms = (uint32_t)lv_slider_get_value(slider) * 100;
+        if (settings_set_silence_ms(ms) == ESP_OK) {
+            app_sr_set_silence_ms(ms);
+        }
+    }
+}
+
+void ui_event_SliderSettingsFollowUp(lv_event_t *e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    lv_obj_t *slider = lv_event_get_target(e);
+
+    if (event_code == LV_EVENT_VALUE_CHANGED) {
+        /* Slider stores seconds; 0 reads as "Off". */
+        int32_t seconds = lv_slider_get_value(slider);
+        char buf[12];
+        if (seconds == 0) {
+            lv_label_set_text(ui_LabelSettingsFollowUpValue, "Off");
+        } else {
+            snprintf(buf, sizeof(buf), "%ds", (int)seconds);
+            lv_label_set_text(ui_LabelSettingsFollowUpValue, buf);
+        }
+    } else if (event_code == LV_EVENT_RELEASED) {
+        uint32_t ms = (uint32_t)lv_slider_get_value(slider) * 1000;
+        /* No app_sr_set_*() peer — the value is read live from
+         * settings each time audio_play_finish_cb arms a window. */
+        settings_set_follow_up_ms(ms);
     }
 }
 

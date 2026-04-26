@@ -64,6 +64,9 @@ or fall back to defaults in `settings.c`:
 - `wake_enabled` → `1`
 - `device_name` → `Satellite` (editable in-app via Settings)
 - `session_id` → minted on first main-app boot
+- `listen_cap_s` → `15` (LISTENING wall-clock cap; bounds 5–60; editable in Settings)
+- `silence_ms` → `1200` (end-of-utterance silence; bounds 300–3000; editable in Settings)
+- `follow_up_ms` → `5000` (post-playback no-wake-word follow-up window; bounds 0–15000; 0 disables; editable in Settings)
 
 Save and eject the drive cleanly. TinyUF2 writes the new keys into NVS,
 switches the boot partition back to `factory`, and resets.
@@ -130,6 +133,9 @@ password,data,string,your-wifi-psk
 Base_url,data,string,http://selene.renman.wtf
 voice,data,string,af_heart
 wake_enabled,data,string,1
+listen_cap_s,data,string,15
+silence_ms,data,string,1200
+follow_up_ms,data,string,5000
 ```
 
 ### 2. Generate and flash the NVS binary

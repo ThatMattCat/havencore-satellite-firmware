@@ -23,8 +23,14 @@ typedef enum {
 } simple_vad_state_t;
 
 /**
- * Initialise internal state. Idempotent; re-initialises the noise floor
- * on each call (useful when a fresh listen window begins).
+ * Initialise internal state. Idempotent — but note this slams the noise
+ * floor back to NOISE_INIT (60), which means the speech threshold drops
+ * to ~240 RMS for ~seconds while the floor re-adapts. Call only at boot
+ * (or after a long quiet period). DO NOT call during a hot session as
+ * a way of "clearing" stale state — typical room noise will instantly
+ * trigger SIMPLE_VAD_SPEECH at the low threshold. If you want to gate
+ * onset detection, track silence-first + N-consecutive-speech frames in
+ * the consumer instead (see audio_detect_task's follow-up branch).
  */
 void simple_vad_reset(void);
 
