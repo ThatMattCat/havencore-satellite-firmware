@@ -26,12 +26,16 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
 idf.py -p /dev/ttyACM0 flash monitor
 
 # After first flash, the dev loop is OTA over the network:
+make build                   # bump version.txt + idf.py build (use this, not bare `idf.py build`)
 make ota IP=10.0.0.42        # push build/havencore_satellite.bin
+make deploy IP=10.0.0.42     # build + ota in one shot
 make version IP=10.0.0.42    # GET /dev/version on the device
 make publish                 # rsync bin + sidecar to the HavenCore web server
 ```
 
 `idf.py build` auto-runs `scripts/publish_firmware.sh` as a CMake post-build step — configure via `.publish.env` (gitignored; see `.publish.env.example`). Unconfigured → silent no-op. See [`docs/OTA.md`](docs/OTA.md) for the version-skip / sidecar flow and why rsync (not scp).
+
+**Use `make build`, not bare `idf.py build`, for dev OTA-pull to work.** `scripts/bump_version.sh` stamps `version.txt` with a fresh unix timestamp on every dev build (clean tagged commits stay pristine — `git tag v0.2` produces a `v0.2` release with no suffix). Without the bump, the device's strcmp on the pull path treats every `-dirty` rebuild as the same version and refuses to flash. Major version bumps remain manual via `git tag`.
 
 The BOX-3 device is attached from a remote Windows host (10.0.0.88) via usbipd/usbip — see `~/remote-usb.txt` for the attach sequence before `/dev/ttyACM0` appears.
 

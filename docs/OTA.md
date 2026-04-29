@@ -174,11 +174,14 @@ Hard-won from the partition pass; re-read before another one.
   the binary over. If `idf.py size` shows < 200 KB free in
   `havencore_satellite.bin`, repartition: shrink `model` to 1 MB and
   grow each app slot to ~4.5 MB.
-- **Version-skip uses `git describe --always --tags --dirty`** on both
-  ends (IDF compiles it into `esp_app_desc_t::version`; the publish
-  script re-derives it). If you build twice from the same SHA with
-  different uncommitted edits, both get tagged `<sha>-dirty` and the
-  second build will be falsely skipped on the device. Commit the
-  change to roll the hash forward when version-skip matters.
+- **Version-skip is fed by `version.txt`** (written by
+  `scripts/bump_version.sh`; gitignored; read by IDF as `PROJECT_VER`
+  and by `publish_firmware.sh` for the sidecar). The bump script writes
+  `<git describe>+b<unix-timestamp>` for dev builds (any `-dirty` or
+  `-g<sha>` walk-back) and the bare tag for clean tagged commits.
+  `make build` runs the bump before `idf.py build`; bare `idf.py build`
+  skips it, so back-to-back dirty rebuilds get the same version and the
+  device's pull-OTA strcmp treats them as equal. **Use `make build`
+  when you want pull to work.** Major bumps: `git tag v0.2`.
 - **No firmware signing yet.** Intentional per the trusted-LAN scope.
   Add once a satellite leaves the LAN.

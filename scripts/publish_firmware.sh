@@ -43,10 +43,15 @@ fi
 
 # Build the version sidecar JSON. Extract the same `version` string IDF
 # bakes into esp_app_desc_t so the device can do an exact strcmp on the
-# pull path. IDF derives PROJECT_VER from `git describe --always --tags
-# --dirty` when not overridden, so we replicate that here.
+# pull path. Prefer version.txt (written by scripts/bump_version.sh and
+# read by IDF as PROJECT_VER) so the sidecar exactly matches the binary
+# even on dev builds with a timestamp suffix; fall back to `git describe`
+# when version.txt is absent (matches IDF's own fallback).
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION=$(git -C "$REPO_ROOT" describe --always --tags --dirty 2>/dev/null || echo "unknown")
+if [ -f "$REPO_ROOT/version.txt" ]; then
+    VERSION=$(head -n 1 "$REPO_ROOT/version.txt" | tr -d '[:space:]')
+fi
+VERSION="${VERSION:-$(git -C "$REPO_ROOT" describe --always --tags --dirty 2>/dev/null || echo unknown)}"
 SIZE=$(stat -c%s "$BIN" 2>/dev/null || echo 0)
 SHA=$(sha256sum "$BIN" 2>/dev/null | awk '{print $1}')
 SHA=${SHA:-unknown}
