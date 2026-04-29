@@ -36,9 +36,22 @@ static void uf2_nvs_modified_cb()
 
 void app_main(void)
 {
-    const esp_partition_t *update_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-    ESP_LOGI(TAG, "Switch to partition factory");
-    esp_ota_set_boot_partition(update_partition);
+    /* Schedule the next boot back into the main app once the user finishes
+     * editing CONFIG.INI and reboots. The OTA-rebalance moved the main app
+     * out of `factory` (where the upstream chatgpt_demo had it — TinyUF2
+     * itself now lives in `factory` since it's the only OTA-immune slot
+     * reachable via esp_ota_set_boot_partition); the main app boots from
+     * `ota_0`. Picking ota_0 unconditionally is correct for v1 — if a
+     * prior OTA had flipped the running slot to ota_1, the user accepts
+     * a one-step "back to ota_0" trip on next OTA. */
+    const esp_partition_t *update_partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+    if (update_partition) {
+        ESP_LOGI(TAG, "Scheduling next boot -> ota_0 (main app)");
+        esp_ota_set_boot_partition(update_partition);
+    } else {
+        ESP_LOGE(TAG, "ota_0 partition missing - main app will not boot");
+    }
     esp_err_t err = ESP_OK;
 
     const char *uf2_nvs_partition = "nvs";

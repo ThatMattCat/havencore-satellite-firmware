@@ -11,3 +11,7 @@ dependencies.lock
 nvs_config.csv
 nvs_config.bin
 
+# Auto-publish destination (scp target for the firmware bin); use
+# .publish.env.example as the template.
+.publish.env
+

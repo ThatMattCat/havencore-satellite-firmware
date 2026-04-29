@@ -103,6 +103,13 @@ extern lv_obj_t *ui_LabelSettingsFollowUp;
 void ui_event_SliderSettingsFollowUp(lv_event_t *e);
 extern lv_obj_t *ui_SliderSettingsFollowUp;
 extern lv_obj_t *ui_LabelSettingsFollowUpValue;
+/* Hand-add: Update Firmware row (label + button) — calls
+ * havencore_ota_pull() from app_ui_events.c. */
+extern lv_obj_t *ui_PanelSettingsUpdate;
+extern lv_obj_t *ui_LabelSettingsUpdate;
+void ui_event_ButtonSettingsUpdate(lv_event_t *e);
+extern lv_obj_t *ui_ButtonSettingsUpdate;
+extern lv_obj_t *ui_LabelSettingsUpdateBtn;
 void ui_event_ImageSettingsBack(lv_event_t *e);
 extern lv_obj_t *ui_ImageSettingsBack;
 void ui_event_ImageSettingsReset(lv_event_t *e);

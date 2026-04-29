@@ -55,7 +55,7 @@ model/                   microWakeWord artifacts (hey_selene_v1.tflite +
 `app_main()` in `main/main.c`:
 
 1. `nvs_flash_init()` — initialize NVS, erase+reinit if corrupt.
-2. `settings_read_parameter_from_nvs()` — read ssid/password/`Base_url`; on missing required keys, calls `settings_factory_reset()` which flips boot to `ota_0` (TinyUF2 recovery app) and restarts. Also runs one-time migrations (legacy u8 `wake_enabled` → str, erase legacy `ChatGPT_key`).
+2. `settings_read_parameter_from_nvs()` — read ssid/password/`Base_url`; on missing required keys, calls `settings_factory_reset()` which flips boot to `factory` (TinyUF2 recovery app — `esp_ota_set_boot_partition(factory)` erases otadata, the bootloader's invalid-otadata fallback then picks factory) and restarts. Also runs one-time migrations (legacy u8 `wake_enabled` → str, erase legacy `ChatGPT_key`).
 3. `bsp_spiffs_mount()` + `bsp_i2c_init()` + `bsp_display_start_with_config()` — bring up storage, I²C, LCD.
 4. `bsp_board_init()` — audio codec, buttons, touch.
 5. `ui_ctrl_init()` — LVGL panels + wifi-check timer.
@@ -146,20 +146,56 @@ No TLS, no auth — the firmware assumes a trusted LAN. Agent sessions are serve
 
 SquareLine Studio project lives in `squareline/` and regenerates `main/ui/`. Four panels today — `ui_PanelSleep`, `ui_PanelListen`, `ui_PanelGet`, `ui_PanelReply` — plus setup-wifi and setup-home overlays from the seed.
 
-The debug overlay (`main/app/debug_overlay.c`) is an LVGL object appended to the active screen at init time; a `LV_EVENT_LONG_PRESSED` handler on the screen toggles its `LV_OBJ_FLAG_HIDDEN`. While visible, a 1 Hz timer refreshes live values: current state, base URL, RSSI, free PSRAM, last HTTP error.
+The debug overlay (`main/app/debug_overlay.c`) is an LVGL object parented to `lv_layer_top()` (so it floats above whichever SquareLine screen is active); a `LV_EVENT_LONG_PRESSED` handler registered on each panel toggles its `LV_OBJ_FLAG_HIDDEN`. While visible, a 1 Hz timer refreshes live values: current state, running fw version (`esp_app_get_description()->version`, which IDF derives from `git describe --always --tags --dirty`), device IP, base URL, RSSI, free PSRAM, and the last `debug_overlay_set_last_error()` line. A second timer auto-hides the overlay after 15 s; long-press re-arms it.
 
 ## Flash layout
 
-See `partitions.csv`. Layout on 16 MB flash (post-microWakeWord rebalance):
+See `partitions.csv`. Layout on 16 MB flash (post-OTA rebalance, 2026-04-29):
 
-| Name      | Offset    | Size    | Use                                                    |
-| --------- | --------- | ------- | ------------------------------------------------------ |
-| `nvs`     | 0x9000    | 16 KB   | Wi-Fi credentials + agent config                       |
-| `otadata` | 0xd000    | 8 KB    | OTA boot selection                                     |
-| `phy_init`| 0xf000    | 4 KB    | RF calibration                                         |
-| `factory` | 0x10000   | 6 MB    | main app image                                         |
-| `ota_0`   | 0x700000  | 5 MB    | TinyUF2 factory app (provisioning fallback)            |
-| `storage` | 0xc00000  | 2 MB    | SPIFFS — audio prompts in `spiffs/`                    |
-| `model`   | 0xe00000  | 1 MB    | SPIFFS — microWakeWord `.tflite` + `.json` in `model/` |
+| Name       | Offset    | Size    | Use                                                                |
+| ---------- | --------- | ------- | ------------------------------------------------------------------ |
+| `nvs`      | 0x9000    | 16 KB   | Wi-Fi credentials + agent config                                   |
+| `otadata`  | 0xd000    | 8 KB    | OTA boot selection (blank → bootloader picks factory)              |
+| `phy_init` | 0xf000    | 4 KB    | RF calibration                                                     |
+| `factory`  | 0x10000   | 1.5 MB  | TinyUF2 recovery app (factory subtype — never targeted by OTA)     |
+| `ota_0`    | 0x190000  | 4 MB    | main app slot A (boot target after first turn-around)              |
+| `ota_1`    | 0x590000  | 4 MB    | main app slot B (alternates via `esp_ota_get_next_update_partition`)|
+| `storage`  | 0x990000  | 1 MB    | SPIFFS — audio prompts in `spiffs/`                                |
+| `model`    | 0xa90000  | 2 MB    | SPIFFS — microWakeWord + future VAD `.tflite` / `.json`            |
 
-No more `srmodels` partition — ESP-SR was removed in the microWakeWord migration. `ota_0` is kept large enough for the TinyUF2 recovery app (currently ~1 MB; 5 MB leaves headroom for future growth). Shrinking it below the recovery image size would break UF2 provisioning.
+`factory` is the only OTA-immune partition subtype reachable via `esp_ota_set_boot_partition()` — `test` would also be OTA-immune but is GPIO-hold-only per the bootloader, and `ota_X` would be overwritten by the normal OTA cycle. So TinyUF2 has to live in `factory`.
+
+Boot flow: on first boot, `otadata` is all 0xff (initial state); the bootloader's invalid-otadata path falls back to `factory` (TinyUF2). TinyUF2's `app_main` immediately calls `esp_ota_set_boot_partition(ota_0)` to schedule the next boot into the main app, then continues into the USB mass-storage UI loop. After the user edits `CONFIG.INI` and reboots, the bootloader follows otadata → ota_0 (main app). OTA writes alternate ota_0 ↔ ota_1; `esp_ota_get_next_update_partition()` walks the OTA chain only, so factory (TinyUF2) is never overwritten.
+
+Software-triggered factory reset: `settings_factory_reset()` calls `esp_ota_set_boot_partition(factory_partition)`, which erases `otadata`. Next boot the bootloader sees invalid otadata and falls back to factory (TinyUF2) again.
+
+`idf.py flash` quirk: parttool.py's `--partition-boot-default` returns the factory offset whenever a factory partition exists, so IDF auto-flashes the project bin to factory by default. We override in `main/CMakeLists.txt` with two `esptool_py_flash_to_partition()` calls — one writes TinyUF2 to factory (last-write-wins on offset 0x10000 in `flasher_args.json`'s deduplicated map), the other writes the main app to `ota_0` explicitly. Side-effect: `idf.py build` prints `Warning: 1/3 app partitions are too small for binary havencore_satellite.bin` for factory — expected, harmless.
+
+Main-app binary is currently 3.46 MB → ~540 KB free in each 4 MB OTA slot. Watch `idf.py size` if AEC + WebSocket land on top of VAD; if free space drops below ~200 KB, repartition (e.g., shrink `model` to 1 MB, grow each app slot to ~4.5 MB). Total flash use today is 12.56 MB; ~3.4 MB unallocated at the top end.
+
+## OTA
+
+`components/havencore_ota/` exposes two paths that both write to whichever slot `esp_ota_get_next_update_partition()` returns (alternating ota_0 ↔ ota_1 — `factory` is OTA-immune):
+
+| Path  | Trigger                              | Endpoint                                   |
+| ----- | ------------------------------------ | ------------------------------------------ |
+| Push  | `make ota IP=<addr>` (build host)    | `POST http://<device>/dev/ota`            |
+| Pull  | Settings → Update Firmware           | `GET ${Base_url}/firmware/satellite.bin`  |
+
+Both check `havencore_ota_state_iface_t::is_idle()` first (the iface is registered in `main.c` and bridges to `sat_state_get() == SAT_STATE_IDLE`); push returns HTTP 409 mid-conversation, pull aborts before allocating buffers.
+
+The push server (`havencore_ota_dev_server_start()`) is started once from `boot_health_task` after the first probe succeeds; it stays up for the lifetime of the app. `GET /dev/version` returns the running app desc as JSON — used by `make version IP=<addr>` and as a debug aid.
+
+The pull path (in `app_ui_events.c::EventButtonSettingsUpdate`) builds two URLs from the configured `Base_url`: `<base>/firmware/satellite.bin` and `<base>/firmware/satellite.json`. The sidecar JSON is fetched first; if its `version` field equals `esp_app_get_description()->version`, the device shows "Up to date" on the GET panel for 2.5 s and reverts to IDLE without entering UPDATING. A missing/unreachable sidecar logs a warning and falls through to an unconditional pull (so servers without sidecar still work). The `havencore_ota_pull()` call wraps `esp_https_ota` and reboots on success.
+
+After a fresh OTA, the freshly-booted image starts in `ESP_OTA_IMG_PENDING_VERIFY`. `boot_health_task` calls `esp_ota_mark_app_valid_cancel_rollback()` after any of the three boot probes (`/api/status`, `/api/stt/health`, `/api/tts/health`) returns 200. A hard-crash before that point causes the bootloader to roll back to the previous slot automatically (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`).
+
+### Auto-publish to the web server
+
+`scripts/publish_firmware.sh` runs as a CMake post-build step in `main/CMakeLists.txt` (custom command depending on the .bin output, gated by a stamp file so it only re-runs when the bin changes). The script:
+
+1. Sources `.publish.env` at the repo root (gitignored). If `HC_PUBLISH_DEST` is unset, exits 0 silently.
+2. Generates `satellite.json` from `git describe --always --tags --dirty` (matching the version IDF compiles into `esp_app_desc_t`), the bin's byte size, and its sha256.
+3. Rsyncs both files to the destination with `--chmod=F644`. Two reasons for rsync over scp: nginx runs as a non-owner uid in its container and would 403 the default mktemp 0600 sidecar, and rsync writes to a tempfile and atomic-renames so a satellite pulling mid-publish gets either the old file or the new one, never a half-written one.
+
+Failures are non-fatal — the build still succeeds; the script prints a warning. A manual `make publish` runs the same script against the current `build/` artifacts.

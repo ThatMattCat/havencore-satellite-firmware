@@ -12,10 +12,12 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_timer.h"
+#include "esp_ota_ops.h"
 #include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "app_ui_ctrl.h"
 #include "havencore_client.h"
+#include "havencore_ota.h"
 #include "audio_player.h"
 #include "app_sr.h"
 #include "bsp/esp-bsp.h"
@@ -71,17 +73,64 @@ static void on_session_rotated(const char *new_id)
     settings_set_session_id(new_id);
 }
 
+/* OTA state-iface bridge (havencore_ota → state.c). */
+static bool ota_iface_is_idle(void)
+{
+    return sat_state_get() == SAT_STATE_IDLE;
+}
+static void ota_iface_set_updating(void)
+{
+    sat_state_set(SAT_STATE_UPDATING);
+}
+static void ota_iface_set_idle(void)
+{
+    sat_state_set(SAT_STATE_IDLE);
+}
+static void ota_iface_set_error(const char *msg)
+{
+    debug_overlay_set_last_error(msg ? msg : "ota");
+}
+
 /* Boot-time health probes. Non-blocking: we report results to the log but
- * always proceed to ready. */
+ * always proceed to ready. After Wi-Fi is up the dev OTA HTTP server
+ * starts; after the three probes succeed we mark this image valid so the
+ * bootloader stops considering rollback (effective only when running a
+ * just-OTA'd image with PENDING_VERIFY state). */
 static void boot_health_task(void *arg)
 {
     while (wifi_connected_already() != WIFI_STATUS_CONNECTED_OK) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     vTaskDelay(pdMS_TO_TICKS(500));
-    havencore_get_ok(sys_param->url, "/api/status");
-    havencore_get_ok(sys_param->url, "/api/stt/health");
-    havencore_get_ok(sys_param->url, "/api/tts/health");
+
+    /* Bring the dev OTA server up as soon as the network is reachable —
+     * before health probes, so a wedged server doesn't hide the OTA
+     * endpoint. */
+    havencore_ota_dev_server_start();
+
+    bool s_ok  = havencore_get_ok(sys_param->url, "/api/status")    == ESP_OK;
+    bool stt_ok = havencore_get_ok(sys_param->url, "/api/stt/health") == ESP_OK;
+    bool tts_ok = havencore_get_ok(sys_param->url, "/api/tts/health") == ESP_OK;
+
+    /* PENDING_VERIFY → VALID once we've confirmed Wi-Fi + agent reachable.
+     * If any probe failed, leave the image PENDING_VERIFY; on the next
+     * boot the bootloader will roll back to the previous slot. The
+     * threshold for "good enough to commit" is intentionally generous:
+     * /api/status alone is enough since STT/TTS may be temporarily down.
+     * Crashes in the running image short-circuit everything via the
+     * bootloader's anti-bootloop counter. */
+    if (s_ok || stt_ok || tts_ok) {
+        esp_err_t mv = esp_ota_mark_app_valid_cancel_rollback();
+        if (mv == ESP_OK) {
+            ESP_LOGI(TAG, "image marked valid (rollback cancelled)");
+        } else if (mv != ESP_ERR_NOT_SUPPORTED && mv != ESP_FAIL) {
+            ESP_LOGW(TAG, "esp_ota_mark_app_valid_cancel_rollback: %s",
+                     esp_err_to_name(mv));
+        }
+    } else {
+        ESP_LOGW(TAG, "all boot probes failed; not marking image valid");
+    }
+
     vTaskDelete(NULL);
 }
 
@@ -259,7 +308,7 @@ void app_main()
         ui_ctrl_show_fatal_error(
             "NVS empty and UF2 recovery image missing.\n"
             "Hold BOOT during power-on, or run\n"
-            "scripts/bootstrap_ota0.sh on the host.");
+            "scripts/bootstrap_factory.sh on the host.");
         while (true) {
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
@@ -267,6 +316,15 @@ void app_main()
 
     sat_state_init();
     wake_word_set_enabled(sys_param->wake_enabled != 0);
+
+    static const havencore_ota_state_iface_t ota_iface = {
+        .is_idle      = ota_iface_is_idle,
+        .set_updating = ota_iface_set_updating,
+        .set_idle     = ota_iface_set_idle,
+        .set_error    = ota_iface_set_error,
+    };
+    havencore_ota_set_state_iface(&ota_iface);
+
     app_network_start();
 
     ESP_LOGI(TAG, "speech recognition start");

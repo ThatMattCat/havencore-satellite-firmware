@@ -2,9 +2,16 @@
 #
 # One-time UF2 recovery seed for a fresh ESP32-S3-BOX-3.
 #
-# Flashes factory_nvs.bin into ota_0 so settings_factory_reset() (and the
-# pre-BSP BOOT-held recovery path) can switch boot to the TinyUF2 app,
-# which mounts a USB drive with CONFIG.INI for editing NVS.
+# Flashes factory_nvs.bin into the `factory` partition (offset 0x10000)
+# so settings_factory_reset() (and the pre-BSP BOOT-held recovery path)
+# can switch boot to the TinyUF2 app, which mounts a USB drive with
+# CONFIG.INI for editing NVS.
+#
+# `factory` is the recovery home because (a) it is never selected by the
+# OTA cycle (esp_ota_get_next_update_partition walks ota_X only) so a
+# firmware OTA can never overwrite the recovery image, and (b) it is
+# reachable via esp_ota_set_boot_partition(factory) which erases otadata,
+# triggering the bootloader's "fall back to factory" path.
 #
 # Also erases the `nvs` partition to wipe the chatgpt_demo placeholder
 # values ("My Network SSID", "10.0.0.134/v1/") that ship on fresh devices
@@ -12,7 +19,7 @@
 # board; `idf.py flash` does not touch NVS on subsequent runs, so
 # device_name / session_id / voice / wake_enabled persist.
 #
-# Usage: scripts/bootstrap_ota0.sh [-p /dev/ttyACM0]
+# Usage: scripts/bootstrap_factory.sh [-p /dev/ttyACM0]
 #
 # Prerequisite: factory_nvs.bin has been built. Run:
 #   (cd factory_nvs && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build)
@@ -26,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -p|--port) PORT="$2"; shift 2 ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -69,10 +76,10 @@ fi
 echo "== erasing nvs (placeholder wipe) =="
 esptool.py -p "$PORT" --chip esp32s3 erase_region 0x9000 0x4000
 
-# Seed ota_0 with the TinyUF2 recovery app. ota_0 @ 0x700000.
-echo "== flashing factory_nvs.bin -> ota_0 =="
+# Seed factory with the TinyUF2 recovery app. factory @ 0x10000.
+echo "== flashing factory_nvs.bin -> factory =="
 esptool.py -p "$PORT" --chip esp32s3 --flash_size 16MB write_flash \
-    0x700000 "$FACTORY_NVS_BIN"
+    0x10000 "$FACTORY_NVS_BIN"
 
 echo
 echo "done. Now run: idf.py -p $PORT flash monitor"

@@ -104,6 +104,12 @@ lv_obj_t *ui_LabelSettingsFollowUp;
 void ui_event_SliderSettingsFollowUp(lv_event_t *e);
 lv_obj_t *ui_SliderSettingsFollowUp;
 lv_obj_t *ui_LabelSettingsFollowUpValue;
+/* Hand-add: Update Firmware row. */
+lv_obj_t *ui_PanelSettingsUpdate;
+lv_obj_t *ui_LabelSettingsUpdate;
+void ui_event_ButtonSettingsUpdate(lv_event_t *e);
+lv_obj_t *ui_ButtonSettingsUpdate;
+lv_obj_t *ui_LabelSettingsUpdateBtn;
 void ui_event_ImageSettingsBack(lv_event_t *e);
 lv_obj_t *ui_ImageSettingsBack;
 void ui_event_ImageSettingsReset(lv_event_t *e);
@@ -415,6 +421,17 @@ void ui_event_SliderSettingsFollowUp(lv_event_t *e)
         /* No app_sr_set_*() peer — the value is read live from
          * settings each time audio_play_finish_cb arms a window. */
         settings_set_follow_up_ms(ms);
+    }
+}
+
+/* Hand-add: Settings → "Update" button. Forwards to
+ * EventButtonSettingsUpdate in app_ui_events.c, which builds the URL
+ * and spawns the OTA pull task. */
+void ui_event_ButtonSettingsUpdate(lv_event_t *e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    if (event_code == LV_EVENT_CLICKED) {
+        EventButtonSettingsUpdate(e);
     }
 }
 

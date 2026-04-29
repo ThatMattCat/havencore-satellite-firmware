@@ -63,7 +63,7 @@ with minor tweaks, but only the **BOX-3** is regularly tested.
 │   └── havencore_client/           #   HTTP client for /v1/* and /api/chat
 ├── model/                          # microWakeWord model + manifest (*.tflite committed)
 ├── factory_nvs/                    # sub-project that builds the TinyUF2 recovery app
-├── scripts/                        # bootstrap_ota0.sh and related helpers
+├── scripts/                        # bootstrap_factory.sh and related helpers
 ├── spiffs/                         # prompt/feedback audio assets
 ├── squareline/                     # SquareLine Studio project (regenerates ui/)
 ├── patches/                        # idempotent patches for managed_components/
@@ -100,8 +100,11 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
 ```
 
 The top-level build copies `factory_nvs.bin` into `build/uf2/`; a single
-`idf.py flash` writes both the main app (factory partition) and the TinyUF2
-recovery app (`ota_0` @ `0x700000`). See [`docs/PROVISIONING.md`](docs/PROVISIONING.md).
+`idf.py flash` writes both the TinyUF2 recovery app (`factory` @ `0x10000`
+— never targeted by OTA because `esp_ota_get_next_update_partition()`
+walks `ota_X` only) and the main app (`ota_0` @ `0x190000`, the boot
+target after first turn-around). See
+[`docs/PROVISIONING.md`](docs/PROVISIONING.md).
 
 ## Flash
 
@@ -114,6 +117,19 @@ idf.py -p /dev/ttyACM0 flash monitor
 If your BOX-3 is on a different host than your dev machine, USB/IP works fine —
 attach the device with `usbipd`/`usbip` until `/dev/ttyACM0` appears locally,
 then run the command above.
+
+After the first flash, the dev loop is over the network — no USB:
+
+```sh
+make ota IP=10.0.0.42         # push build/havencore_satellite.bin
+make version IP=10.0.0.42     # GET /dev/version
+```
+
+The device runs an `esp_http_server` on port 80 that exposes `POST /dev/ota`
+(refused unless the FSM is IDLE, so a curl mid-conversation just gets HTTP 409)
+and `GET /dev/version`. Rollback is enabled — if a fresh image hard-crashes
+before `boot_health_task` can mark it valid, the bootloader reverts to the
+previous slot automatically.
 
 ## Provisioning
 

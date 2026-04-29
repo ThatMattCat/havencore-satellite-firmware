@@ -10,14 +10,19 @@
 #include "ui/ui.h"
 #include "lvgl.h"
 #include "esp_wifi.h"
+#include "esp_netif.h"
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
 #include "bsp/esp-bsp.h"
 #include <stdio.h>
 #include <string.h>
 
+#define DEBUG_OVERLAY_AUTO_HIDE_MS 15000
+
 static lv_obj_t *s_panel = NULL;
 static lv_obj_t *s_label = NULL;
 static lv_timer_t *s_timer = NULL;
+static lv_timer_t *s_auto_hide = NULL;
 static char s_last_error[96] = "none";
 
 static void refresh_text(void)
@@ -30,12 +35,27 @@ static void refresh_text(void)
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         rssi = ap.rssi;
     }
+
+    /* Device IP — handy when SSH'ing in to push an OTA: `make ota IP=…`. */
+    char ip_str[16] = "0.0.0.0";
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif) {
+        esp_netif_ip_info_t ip_info = {0};
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
+        }
+    }
+
     size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
-    char buf[256];
+    const esp_app_desc_t *desc = esp_app_get_description();
+
+    char buf[384];
     snprintf(buf, sizeof(buf),
-             "state: %s\nurl: %s\nrssi: %d dBm\nfree psram: %u KB\nlast err: %s",
+             "state: %s\nfw: %s\nip: %s\nurl: %s\nrssi: %d dBm\nfree psram: %u KB\nlast err: %s",
              sat_state_name(sat_state_get()),
+             desc ? desc->version : "?",
+             ip_str,
              p ? p->url : "?",
              rssi,
              (unsigned)(free_psram / 1024),
@@ -49,15 +69,35 @@ static void refresh_timer_cb(lv_timer_t *t)
     refresh_text();
 }
 
+static void hide_overlay(void)
+{
+    lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
+    if (s_timer) lv_timer_pause(s_timer);
+    if (s_auto_hide) lv_timer_pause(s_auto_hide);
+}
+
+static void auto_hide_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_panel && !lv_obj_has_flag(s_panel, LV_OBJ_FLAG_HIDDEN)) {
+        hide_overlay();
+    }
+}
+
 static void toggle_overlay(void)
 {
     if (lv_obj_has_flag(s_panel, LV_OBJ_FLAG_HIDDEN)) {
         refresh_text();
         lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
         if (s_timer) lv_timer_resume(s_timer);
+        /* Re-arm the auto-hide each time the overlay is shown so the
+         * 15 s window restarts on every long-press, not just the first. */
+        if (s_auto_hide) {
+            lv_timer_reset(s_auto_hide);
+            lv_timer_resume(s_auto_hide);
+        }
     } else {
-        lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
-        if (s_timer) lv_timer_pause(s_timer);
+        hide_overlay();
     }
 }
 
@@ -107,6 +147,9 @@ void debug_overlay_init(void)
 
     s_timer = lv_timer_create(refresh_timer_cb, 1000, NULL);
     lv_timer_pause(s_timer);
+
+    s_auto_hide = lv_timer_create(auto_hide_cb, DEBUG_OVERLAY_AUTO_HIDE_MS, NULL);
+    lv_timer_pause(s_auto_hide);
 
     bsp_display_unlock();
 }

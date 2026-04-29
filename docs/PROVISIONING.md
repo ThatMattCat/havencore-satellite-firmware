@@ -1,10 +1,22 @@
 # Provisioning
 
-How to get a fresh ESP32-S3-BOX-3 from flashed-but-empty NVS to a working
-HavenCore satellite. The primary path is TinyUF2 mass-storage in `ota_0`
-— device reboots into a USB drive, you edit `CONFIG.INI`, and normal
-boot resumes with real values. The esptool/CSV path from earlier is
-still here as an appendix for dev work and recovery.
+How to get a fresh ESP32-S3-BOX-3 from flashed-but-empty NVS to a
+working HavenCore satellite. The primary path is TinyUF2 mass-storage
+(lives in the `factory` partition) — device reboots into a USB drive,
+you edit `CONFIG.INI`, and normal boot resumes with real values. The
+esptool/CSV path from earlier is still here as an appendix for dev
+work and recovery.
+
+## Migrating an existing device to the OTA partition layout
+
+The 2026-04-29 OTA work changed the partition table: `factory` 1.5 MB
+(TinyUF2), `ota_0` + `ota_1` 4 MB each (main app A/B), 1 MB storage,
+2 MB model. A plain `idf.py flash` is **not safe** when moving from
+the pre-OTA layout because the new offsets overlap the old
+storage/model regions at different addresses. Use `idf.py erase-flash
+flash` instead — wipes the chip first, then writes everything fresh.
+NVS is wiped along with everything else, so plan to re-enter Wi-Fi
+creds via the UF2 path on the next boot.
 
 ## Primary path: TinyUF2 mass-storage
 
@@ -17,14 +29,22 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-The top-level build writes both apps: the main firmware to `factory`
-(0x10000) and the TinyUF2 recovery app to `ota_0` (0x700000), via the
-`esptool_py_flash_to_partition(flash "ota_0" ...)` wiring in
-`main/CMakeLists.txt`. No separate esptool step.
+The top-level build writes both apps: TinyUF2 to `factory` (0x10000)
+and the main firmware to `ota_0` (0x190000), via two
+`esptool_py_flash_to_partition` calls in `main/CMakeLists.txt`. No
+separate esptool step.
 
-Pristine device with empty NVS: `settings_read_parameter_from_nvs()`
-fails the "required keys" check, calls `settings_factory_reset()`, and
-the device auto-reboots into UF2. Jump to step 3.
+Pristine device with empty `nvs` AND blank `otadata` (the state right
+after `idf.py erase-flash flash`): bootloader's invalid-otadata
+fallback boots `factory` (TinyUF2) directly. The main app never runs
+on first boot — TinyUF2's `app_main` schedules the next boot to
+`ota_0`, then enters the USB-drive UI. Jump to step 3.
+
+Pristine device with empty NVS but valid otadata pointing to ota_0
+(e.g., after a soft reset that didn't touch otadata):
+`settings_read_parameter_from_nvs()` fails the "required keys" check,
+calls `settings_factory_reset()` which erases otadata, and the device
+auto-reboots into UF2. Jump to step 3.
 
 Device with old `chatgpt_demo` placeholder NVS (`My Network SSID` /
 `10.0.0.134/v1/`): Wi-Fi will fail but the UI still comes up on the
@@ -36,8 +56,11 @@ From the Sleep panel:
 1. Tap the gear / Settings icon.
 2. Tap the factory-reset icon and confirm.
 
-`settings_factory_reset()` switches the boot partition to `ota_0` and
-restarts into the TinyUF2 app.
+`settings_factory_reset()` calls `esp_ota_set_boot_partition()` on the
+`factory` partition, which erases `otadata`; on the next boot the
+bootloader's invalid-otadata fallback runs the factory partition
+(TinyUF2). The OTA cycle (`esp_ota_get_next_update_partition()`) walks
+`ota_X` only, so it never targets factory — recovery is OTA-immune.
 
 ### 3. Edit CONFIG.INI on the mounted drive
 
@@ -69,7 +92,9 @@ or fall back to defaults in `settings.c`:
 - `follow_up_ms` → `5000` (post-playback no-wake-word follow-up window; bounds 0–15000; 0 disables; editable in Settings)
 
 Save and eject the drive cleanly. TinyUF2 writes the new keys into NVS,
-switches the boot partition back to `factory`, and resets.
+and (already at startup) scheduled the next boot to `ota_0` (the main
+app slot) via `esp_ota_set_boot_partition()`. Press the reset button or
+power-cycle to boot into the main app.
 
 ### 4. Verify
 
@@ -89,21 +114,22 @@ Any time you need to change Wi-Fi creds, `Base_url`, voice, or
 `wake_enabled`: Sleep → Settings → factory-reset → edit CONFIG.INI →
 eject. Same flow. NVS isn't wiped, only the keys you rewrite change.
 
-## Recovery: `scripts/bootstrap_ota0.sh`
+## Recovery: `scripts/bootstrap_factory.sh`
 
-Thin wrapper around the esptool calls for devices whose `ota_0` is
-blank/corrupt. Normally you don't need this — `idf.py flash` seeds
-`ota_0` automatically. Keep it around for:
+Thin wrapper around the esptool calls for devices whose `factory`
+partition is blank/corrupt. Normally you don't need this — `idf.py
+flash` seeds `factory` automatically. Keep it around for:
 
 - A board that was flashed with an older firmware revision that didn't
-  include the `esptool_py_flash_to_partition` wiring.
-- `ota_0` got erased somehow (manual `erase_region`, partition-table
+  include the `esptool_py_flash_to_partition` wiring (or the pre-OTA
+  partition layout, where TinyUF2 was at `ota_0`/0x700000).
+- `factory` got erased somehow (manual `erase_region`, partition-table
   reshuffle).
 
 ```sh
 source ~/esp/v5.5/esp-idf/export.sh
 idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.box-3" build
-scripts/bootstrap_ota0.sh -p /dev/ttyACM0
+scripts/bootstrap_factory.sh -p /dev/ttyACM0
 ```
 
 The script also erases the `nvs` partition (0x9000, 0x4000) to clear

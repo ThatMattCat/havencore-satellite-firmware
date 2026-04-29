@@ -19,6 +19,7 @@ typedef enum {
     SAT_STATE_THINKING,
     SAT_STATE_SPEAKING,
     SAT_STATE_ERROR,
+    SAT_STATE_UPDATING,
 } sat_state_t;
 
 void sat_state_init(void);

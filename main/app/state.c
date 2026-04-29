@@ -42,6 +42,13 @@ void sat_state_set(sat_state_t s)
     case SAT_STATE_ERROR:
         ui_ctrl_show_panel(UI_CTRL_PANEL_ERROR, 0);
         break;
+    case SAT_STATE_UPDATING:
+        /* Reuse the THINKING (GET) panel for visual continuity, but
+         * override its caption so the user knows it's an OTA, not a
+         * stuck chat turn. */
+        ui_ctrl_show_panel(UI_CTRL_PANEL_GET, 0);
+        ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK, "Updating ...");
+        break;
     }
 }
 
@@ -59,6 +66,7 @@ const char *sat_state_name(sat_state_t s)
     case SAT_STATE_THINKING:   return "THINKING";
     case SAT_STATE_SPEAKING:   return "SPEAKING";
     case SAT_STATE_ERROR:      return "ERROR";
+    case SAT_STATE_UPDATING:   return "UPDATING";
     }
     return "?";
 }

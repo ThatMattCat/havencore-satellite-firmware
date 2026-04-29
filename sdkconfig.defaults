@@ -32,3 +32,12 @@ CONFIG_ESPTOOLPY_FLASHFREQ="80m"
 
 # BSP
 CONFIG_BSP_LCD_DRAW_BUF_HEIGHT=10
+
+# OTA
+# Enable bootloader-managed rollback so a freshly OTA'd image must call
+# esp_ota_mark_app_valid_cancel_rollback() before it sticks. main.c does
+# this from boot_health_task once Wi-Fi + the agent are reachable.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# esp_https_ota over plain HTTP — explicit non-goal of TLS on the
+# trusted LAN per docs/ROADMAP.md.
+CONFIG_OTA_ALLOW_HTTP=y

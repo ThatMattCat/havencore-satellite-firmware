@@ -10,8 +10,14 @@
 #include "settings.h"
 #include "state.h"
 #include "audio_player.h"
+#include "havencore_ota.h"
+#include "debug_overlay.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdlib.h>
+#include <string.h>
 
 static char *TAG = "ui-events";
 
@@ -50,13 +56,13 @@ static void trigger_factory_reset(const char *source)
     ESP_LOGI(TAG, "Factory reset requested from %s", source);
     esp_err_t err = settings_factory_reset();
     /* settings_factory_reset() restarts on success, so anything that
-     * returns here is a failure — ota_0 is blank/corrupt and the UF2
-     * recovery app cannot run. Surface it on-screen rather than letting
-     * the UI sit frozen. */
+     * returns here is a failure — the factory partition is blank/corrupt
+     * and the UF2 recovery app cannot run. Surface it on-screen rather
+     * than letting the UI sit frozen. */
     ESP_LOGE(TAG, "factory reset failed: %s", esp_err_to_name(err));
     ui_ctrl_show_fatal_error(
         "UF2 recovery image missing.\n"
-        "Run scripts/bootstrap_ota0.sh on\n"
+        "Run scripts/bootstrap_factory.sh on\n"
         "the host, then retry.");
 }
 
@@ -68,4 +74,100 @@ void EventWifiResetConfirmClick(lv_event_t *e)
 void EventResetConfirm(lv_event_t *e)
 {
     trigger_factory_reset("Settings page");
+}
+
+/* Pulls firmware from ${Base_url}/firmware/satellite.bin in a background
+ * task, but first peeks at the sidecar ${Base_url}/firmware/satellite.json
+ * so we can short-circuit if the server's bin already matches the running
+ * version. esp_https_ota blocks for tens of seconds; can't run on the LVGL
+ * UI thread. On a successful pull the OTA fn calls esp_restart() — the
+ * task never returns. On failure or version-match it cleans up and
+ * self-deletes. */
+static void ota_pull_task(void *arg)
+{
+    char *base = (char *)arg;
+    size_t base_len = strlen(base);
+    bool has_slash = base_len > 0 && base[base_len - 1] == '/';
+
+    /* Compose with strlcpy/strlcat to avoid -Wformat-truncation on the
+     * unbounded `base` pointer — the URL_SIZE buffer in sys_param_t
+     * caps it in practice, but the compiler can't see that through
+     * strdup. */
+    char bin_url[URL_SIZE + 32];
+    char json_url[URL_SIZE + 32];
+    strlcpy(bin_url, base, sizeof(bin_url));
+    strlcpy(json_url, base, sizeof(json_url));
+    if (!has_slash) {
+        strlcat(bin_url, "/", sizeof(bin_url));
+        strlcat(json_url, "/", sizeof(json_url));
+    }
+    strlcat(bin_url, "firmware/satellite.bin", sizeof(bin_url));
+    strlcat(json_url, "firmware/satellite.json", sizeof(json_url));
+    free(base);
+
+    /* Sidecar is best-effort: a missing/unreachable sidecar means the
+     * server hasn't been updated to publish one, so we fall through to
+     * an unconditional pull (matches pre-sidecar behaviour). */
+    char remote_ver[64] = {0};
+    esp_err_t verr = havencore_ota_fetch_remote_version(json_url, remote_ver,
+                                                        sizeof(remote_ver));
+    if (verr == ESP_OK) {
+        const char *running = havencore_ota_running_version();
+        ESP_LOGI(TAG, "OTA version check: running=%s remote=%s",
+                 running, remote_ver);
+        if (strcmp(running, remote_ver) == 0) {
+            /* No-op path: tell the user, don't toggle state, briefly
+             * show the GET panel with an "Up to date" caption, then
+             * fall back to the sleep panel. */
+            char status[80];
+            snprintf(status, sizeof(status), "fw up to date: %s", running);
+            debug_overlay_set_last_error(status);
+            ui_ctrl_show_panel(UI_CTRL_PANEL_GET, 0);
+            ui_ctrl_label_show_text(UI_CTRL_LABEL_LISTEN_SPEAK,
+                                     "Up to date");
+            vTaskDelay(pdMS_TO_TICKS(2500));
+            ui_ctrl_show_panel(UI_CTRL_PANEL_SLEEP, 0);
+            vTaskDelete(NULL);
+            return;
+        }
+    } else {
+        ESP_LOGW(TAG, "sidecar fetch err=%s, pulling unconditionally",
+                 esp_err_to_name(verr));
+    }
+
+    ESP_LOGI(TAG, "OTA pull start: %s", bin_url);
+    esp_err_t err = havencore_ota_pull(bin_url);
+    ESP_LOGE(TAG, "OTA pull returned: %s", esp_err_to_name(err));
+    vTaskDelete(NULL);
+}
+
+void EventButtonSettingsUpdate(lv_event_t *e)
+{
+    sys_param_t *p = settings_get_parameter();
+    if (!p || p->url[0] == '\0') {
+        ESP_LOGE(TAG, "OTA update: no Base_url configured");
+        debug_overlay_set_last_error("ota: no Base_url");
+        return;
+    }
+
+    char *base = strdup(p->url);
+    if (!base) {
+        ESP_LOGE(TAG, "OTA update: oom");
+        debug_overlay_set_last_error("ota: oom");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Settings → Update tapped, base=%s", base);
+    /* Bounce out of the Settings screen so the user sees the
+     * UPDATING-state panel that havencore_ota_pull will trigger via the
+     * registered state iface (or the "Up to date" no-op message). */
+    _ui_screen_change(ui_ScreenListen, LV_SCR_LOAD_ANIM_NONE, 0, 0);
+
+    BaseType_t ok = xTaskCreate(ota_pull_task, "ota_pull", 8 * 1024,
+                                base, tskIDLE_PRIORITY + 4, NULL);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "OTA pull: xTaskCreate failed");
+        debug_overlay_set_last_error("ota: task create");
+        free(base);
+    }
 }

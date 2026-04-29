@@ -3,7 +3,8 @@
 nvs,        data,   nvs,        0x9000,     0x4000,
 otadata,    data,   ota,        0xd000,     0x2000,
 phy_init,   data,   phy,        0xf000,     0x1000,
-factory,    app,    factory,    0x10000,    6M,
-ota_0,      app,    ota_0,      0x700000,   5M,
-storage,    data,   spiffs,     0xc00000,   2M,
-model,      data,   spiffs,     0xe00000,   1M
+factory,    app,    factory,    0x10000,    0x180000,
+ota_0,      app,    ota_0,      0x190000,   0x400000,
+ota_1,      app,    ota_1,      0x590000,   0x400000,
+storage,    data,   spiffs,     0x990000,   0x100000,
+model,      data,   spiffs,     0xa90000,   0x200000

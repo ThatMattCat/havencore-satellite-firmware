@@ -15,6 +15,9 @@ void EventWifiResetConfirmClick(lv_event_t * e);
 void EventPanelSleepClickCb(lv_event_t * e);
 // void EventSettingsRegionValueChange(lv_event_t * e); /*This function is for server selection currently not supported*/
 void EventResetConfirm(lv_event_t * e);
+/* Hand-add: Settings → "Update" button → kicks off havencore_ota_pull
+ * against ${Base_url}/firmware/satellite.bin in a background task. */
+void EventButtonSettingsUpdate(lv_event_t * e);
 
 #ifdef __cplusplus
 } /*extern "C"*/

@@ -58,34 +58,42 @@ static uint32_t read_uint_str(nvs_handle_t h, const char *key,
 
 esp_err_t settings_factory_reset(void)
 {
+    /* TinyUF2 lives in the `factory` partition. Of the bootable app
+     * subtypes, only `factory` and `ota_X` are reachable via
+     * `esp_ota_set_boot_partition()` (the `test` subtype is GPIO-only
+     * per the bootloader); and `ota_X` would be overwritten by the
+     * normal OTA cycle. So `factory` is the only safe home for
+     * recovery, and `esp_ota_set_boot_partition(factory_partition)`
+     * works by erasing otadata — the bootloader's fallback selects
+     * factory whenever otadata is invalid. */
     const esp_partition_t *update_partition = esp_partition_find_first(
-        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
     if (!update_partition) {
-        ESP_LOGE(TAG, "ota_0 partition missing from table");
+        ESP_LOGE(TAG, "factory partition missing from table");
         return ESP_ERR_NOT_FOUND;
     }
 
-    /* Confirm ota_0 actually holds a bootable image before flipping the
-     * boot pointer. If it's blank/corrupt the bootloader will silently
-     * fall back to `factory` and we'd loop forever; bail early instead
-     * so main.c can surface a recovery message. */
+    /* Confirm the recovery slot actually holds a bootable image before
+     * flipping the boot pointer. If it's blank/corrupt the bootloader
+     * would re-fall-back to ota_0 and we'd loop forever; bail early so
+     * main.c can surface a recovery message instead. */
     esp_app_desc_t desc;
     esp_err_t err = esp_ota_get_partition_description(update_partition, &desc);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ota_0 has no valid app image (%s) - run "
-                 "scripts/bootstrap_ota0.sh to seed the UF2 recovery app",
+        ESP_LOGE(TAG, "factory has no valid app image (%s) - run "
+                 "scripts/bootstrap_factory.sh to seed the UF2 recovery app",
                  esp_err_to_name(err));
         return ESP_ERR_INVALID_STATE;
     }
 
     err = esp_ota_set_boot_partition(update_partition);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_set_boot_partition(ota_0) failed: %s",
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition(factory) failed: %s",
                  esp_err_to_name(err));
         return err;
     }
 
-    ESP_LOGI(TAG, "switching to UF2 recovery (ota_0) and restarting");
+    ESP_LOGI(TAG, "switching to UF2 recovery (factory) and restarting");
     esp_restart();
     return ESP_OK;  /* unreachable */
 }

@@ -4,15 +4,83 @@ Tracks known issues, deferred work, and planned improvements. MVP scope
 (touch + "Hey Selene" → STT → chat → TTS → playback, with status UI and
 NVS provisioning) has landed; this doc captures what's left on top.
 
-## Current status (2026-04-26)
+## Current status (2026-04-29)
 
 Both BOX-3 devices running the `updates` branch against
 `http://selene.renman.wtf`. Full turn round-trip (tap → STT → chat → TTS)
 has been exercised. UF2 factory-reset flow repaired 2026-04-18: Settings →
-factory-reset now switches boot to `ota_0` and the TinyUF2 app mounts a
-USB drive for editing `CONFIG.INI`. Listen-window tunables (`listen_cap_s`,
-`silence_ms`) shipped 2026-04-21 as user-editable Settings sliders, verified
-live on hardware on both devices.
+factory-reset switches boot to the TinyUF2 recovery slot (now
+`uf2_recov`, see partition note below) and TinyUF2 mounts a USB drive
+for editing `CONFIG.INI`. Listen-window tunables (`listen_cap_s`,
+`silence_ms`) shipped 2026-04-21 as user-editable Settings sliders.
+
+OTA infrastructure landed 2026-04-29 with both paths live (push from
+the build host for the dev loop, pull from the Settings screen for
+end-user updates). Partition table re-balanced for A/B OTA: `factory`
+1.5 MB (TinyUF2 — only OTA-immune subtype reachable via
+`esp_ota_set_boot_partition`; `test` is GPIO-hold-only, `ota_X` would be
+overwritten), `ota_0` + `ota_1` 4 MB each (main app A/B), 1 MB
+`storage`, 2 MB `model`. Dev loop is `make ota IP=<addr>` from the
+build host — `esp_http_server` on port 80 of the device exposes
+`POST /dev/ota` (refused unless state is IDLE) and `GET /dev/version`.
+Rollback enabled (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`);
+`boot_health_task` calls `esp_ota_mark_app_valid_cancel_rollback()`
+after the first boot probe returns 200. End-user pull path: Settings →
+Update Firmware fetches `${Base_url}/firmware/satellite.json` (a
+`{version, size, sha256}` sidecar published alongside the bin), and if
+the sidecar's `version` matches `esp_app_get_description()->version`
+the device shows "Up to date" and skips the pull entirely. A missing or
+unreachable sidecar falls through to an unconditional pull. Build host
+auto-publishes both bin and sidecar via a CMake post-build hook calling
+`scripts/publish_firmware.sh` — rsyncs over ssh with `--chmod=F644`
+(nginx runs as a non-owner uid; the default mktemp 0600 sidecar would
+otherwise 403) and atomic-renames so a satellite pulling mid-publish
+sees either the old or new file, never a half-written one. Configure
+via `.publish.env` at the repo root; missing → silent no-op.
+
+### OTA gotchas worth knowing
+
+- **`app, test` subtype isn't software-bootable.** First pass put TinyUF2
+  in a `test` partition and called `esp_ota_set_boot_partition()` on
+  it, expecting otadata to point there. `esp_ota_set_boot_partition()`
+  for non-factory subtypes calls `esp_rewrite_ota_data(subtype)`, and
+  `SUB_TYPE_ID(0x20)` is `0` — same as ota_0 — so the test partition's
+  seq number actually maps to `ota_0`. The bootloader walks the OTA
+  chain (`bootloader_utility_load_boot_image` from `start_index`
+  backward to `FACTORY_INDEX`), and `TEST_APP_INDEX` is only entered
+  when `start_index == TEST_APP_INDEX`, which is set exclusively by the
+  GPIO-hold path in `bootloader_start.c`. So `test` partitions are
+  GPIO-only.
+- **`esp_ota_set_boot_partition(factory)` works by erasing otadata.**
+  Looking at `esp_ota_ops.c`: for the factory subtype, the function
+  finds the otadata partition and calls `esp_partition_erase_range()`
+  on it. Next boot, the bootloader sees all-0xff otadata, and with a
+  factory partition present, falls back to factory.
+- **IDF auto-flashes the project bin to whichever partition `parttool.py
+  --partition-boot-default` returns.** That prefers factory. We work
+  around by adding a custom `esptool_py_flash_to_partition(flash
+  "factory" "${nvs_dst_file}")` (last-write-wins on the duplicated
+  offset in `flasher_args.json`) and an explicit
+  `esptool_py_flash_to_partition(flash "ota_0" ...)` for the main app.
+  The build emits `Warning: 1/3 app partitions are too small for
+  binary havencore_satellite.bin` for factory — expected.
+
+### OTA watch-items
+
+- Binary headroom is **~540 KB per slot** (3.46 MB binary, 4 MB slot,
+  ~13% free). VAD code adds little (TFLite runtime is shared with
+  microWakeWord), but landing AEC + WebSocket on top of VAD could push
+  the binary over. If `idf.py size` shows < 200 KB free in
+  `havencore_satellite.bin`, repartition: shrink `model` to 1 MB and
+  grow each app slot to ~4.5 MB.
+- Version-skip uses `git describe --always --tags --dirty` on both ends
+  (IDF compiles it into `esp_app_desc_t::version`; the publish script
+  re-derives it). If you build twice from the same SHA with different
+  uncommitted edits, both get tagged `<sha>-dirty` and the second build
+  will be falsely skipped on the device. Commit the change to roll the
+  hash forward when version-skip matters.
+- No firmware signing yet; intentional per the trusted-LAN scope. Add
+  once a satellite leaves the LAN.
 
 Conversational follow-up window + tap-to-barge shipped 2026-04-26:
 `audio_play_finish_cb` arms a no-wake-word listen window (default 5 s,
@@ -65,8 +133,11 @@ What's working:
   downmixes stereo I2S to mono and fans out to `mww_feed_pcm` +
   `simple_vad_feed` + WAV capture. Touch-to-talk and (when the override is
   reverted) NVS-gated "Hey Selene" share the same listen flow.
-- Partition layout rebalanced for the migration — old `ota_0` 2 MB
-  overflow is no longer a blocker.
+- Partition layout rebalanced again (2026-04-29) for OTA — `factory`
+  1.5 MB (TinyUF2), `ota_0` + `ota_1` 4 MB each (main app A/B), 1 MB
+  `storage`, 2 MB `model`. TinyUF2 moved into `factory` (the only
+  OTA-immune software-bootable subtype) and the main app moved out of
+  factory into `ota_0` to free factory for recovery.
 
 What's shaky:
 - No TLS in firmware. Server must stay on plain HTTP for the satellite, or
@@ -89,7 +160,7 @@ Settings → factory-reset already works end-to-end, so this only matters
 when a device is wedged (bad Wi-Fi creds, can't reach Settings). Planned
 fix: poll BOOT *after* the main app is up (e.g. while retrying Wi-Fi or
 from a dedicated FreeRTOS task), not during the pre-BSP window. Low
-priority — `scripts/bootstrap_ota0.sh` + the esptool path cover the
+priority — `scripts/bootstrap_factory.sh` + the esptool path cover the
 "device is unrecoverable" cases until then.
 
 ### BSP touch init patch (`managed_components/` is gitignored)
@@ -171,10 +242,6 @@ false-trigger spam — not worth it until the pipeline is rock-solid.
 ### ~~Multi-device identity (`X-Satellite-Id` header)~~ — shipped 2026-04-18
 
 Replaced by two headers stamped on every HavenCore request (see `components/havencore_client/havencore_client.c`): `X-Session-Id` (NVS-persisted random 32-char hex blob minted on first boot; auto-rotated via the `/api/chat` response header) and `X-Device-Name` (user-entered room label, default `Satellite`, editable in the Settings screen and persisted in NVS as `device_name`).
-
-### OTA updates
-
-Factory + app partitions are in place but there's no update flow. Plan: pull signed OTA images from the HavenCore host itself over HTTP. Requires growing `ota_0` as mentioned above, then `esp_https_ota` (or `esp_http_ota` on the trusted LAN).
 
 ### TLS / auth
 
