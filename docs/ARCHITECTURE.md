@@ -150,10 +150,21 @@ in [`SETTINGS.md`](SETTINGS.md) § Identity headers.
 
 SquareLine Studio project lives in `squareline/` and regenerates `main/ui/`. Four panels today — `ui_PanelSleep`, `ui_PanelListen`, `ui_PanelGet`, `ui_PanelReply` — plus setup-wifi and setup-home overlays from the seed.
 
-The debug overlay (`main/app/debug_overlay.c`) is an LVGL object parented to `lv_layer_top()` (so it floats above whichever SquareLine screen is active); a `LV_EVENT_LONG_PRESSED` handler registered on each panel toggles its `LV_OBJ_FLAG_HIDDEN`. While visible, a 1 Hz timer refreshes live values: current state, running fw version (`esp_app_get_description()->version`, which IDF derives from `git describe --always --tags --dirty`), device IP, base URL, RSSI, free PSRAM, and the last `debug_overlay_set_last_error()` line. A second timer auto-hides the overlay after 15 s; long-press re-arms it.
+The debug overlay (`main/app/debug_overlay.c`) is an LVGL object parented to `lv_layer_top()` (so it floats above whichever SquareLine screen is active); a `LV_EVENT_LONG_PRESSED` handler registered on each panel toggles its `LV_OBJ_FLAG_HIDDEN`. While visible, a 1 Hz timer refreshes live values: current state, running fw version (`esp_app_get_description()->version`, which IDF reads from `version.txt` — see [`OTA.md`](OTA.md) § version-skip), device IP, base URL, RSSI, free PSRAM, and the last `debug_overlay_set_last_error()` line. A second timer auto-hides the overlay after 15 s; long-press re-arms it.
 
 The Settings screen (gear icon → Settings) is a fifth, hand-edited
 panel that exposes user-editable NVS keys (Device Name, Listen Cap,
 Silence Timeout, Follow-Up Window, Update Firmware). See
 [`SETTINGS.md`](SETTINGS.md) for the row pattern and the SquareLine
 regeneration hazard.
+
+**Idle backlight off.** A 500 ms LVGL timer (`screen_idle_timer_handler`
+in `app_ui_ctrl.c`) checks `sat_state_get() == SAT_STATE_IDLE` AND
+`lv_disp_get_inactive_time(NULL) > 60 s`; when both hold, it calls
+`bsp_display_backlight_off()`. Wakes on touch (LVGL auto-resets the
+inactive counter) or any state change away from IDLE (wake-word, OTA,
+error). No tap-to-wake gating is required because the wake-word loop
+runs continuously; "Hey Selene" lights the screen as a side-effect of
+the IDLE→LISTENING transition. Saves ~40–80 mA on a 18650 dock.
+Threshold is hardcoded today; promote to a Settings slider if/when it
+matters (recipe in [`SETTINGS.md`](SETTINGS.md)).

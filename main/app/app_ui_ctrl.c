@@ -22,6 +22,8 @@
 #define REPLY_SCROLL_TIMER_INTERVAL_MS  (1000)
 #define REPLY_SCROLL_SPEED              (1)
 #define ERROR_AUTO_RETURN_S             (3)
+#define SCREEN_IDLE_CHECK_MS            (500)
+#define SCREEN_OFF_AFTER_MS             (60 * 1000)
 
 static char *TAG = "ui_ctrl";
 
@@ -41,8 +43,15 @@ static lv_obj_t *err_label_countdown = NULL;
 static lv_timer_t *err_countdown_timer = NULL;
 static uint8_t err_countdown_remaining = 0;
 
+/* Backlight is off when the FSM has been IDLE and no touch input has landed
+ * for SCREEN_OFF_AFTER_MS. Wakes on touch (LVGL inactive_time resets) or any
+ * state change away from IDLE (handled by the same poll, since the dim
+ * predicate goes false). */
+static bool screen_dark = false;
+
 static void reply_content_scroll_timer_handler();
 static void wifi_check_timer_handler(lv_timer_t *timer);
+static void screen_idle_timer_handler(lv_timer_t *timer);
 static void err_panel_build(void);
 static void err_countdown_timer_cb(lv_timer_t *t);
 
@@ -57,6 +66,7 @@ void ui_ctrl_init(void)
     lv_timer_pause(scroll_timer_handle);
 
     lv_timer_create(wifi_check_timer_handler, WIFI_CHECK_TIMER_INTERVAL_S * 1000, NULL);
+    lv_timer_create(screen_idle_timer_handler, SCREEN_IDLE_CHECK_MS, NULL);
 
     bsp_display_unlock();
 }
@@ -119,6 +129,25 @@ static void err_countdown_timer_cb(lv_timer_t *t)
     snprintf(buf, sizeof(buf), "Returning in %us",
              (unsigned)err_countdown_remaining);
     lv_label_set_text(err_label_countdown, buf);
+}
+
+static void screen_idle_timer_handler(lv_timer_t *timer)
+{
+    (void)timer;
+    bool fsm_idle = (sat_state_get() == SAT_STATE_IDLE);
+    uint32_t inactive_ms = lv_disp_get_inactive_time(NULL);
+    bool should_dim = fsm_idle && inactive_ms > SCREEN_OFF_AFTER_MS;
+
+    if (should_dim && !screen_dark) {
+        bsp_display_backlight_off();
+        screen_dark = true;
+        ESP_LOGI(TAG, "screen off after %ums idle", (unsigned)inactive_ms);
+    } else if (!should_dim && screen_dark) {
+        bsp_display_backlight_on();
+        screen_dark = false;
+        ESP_LOGI(TAG, "screen wake (state=%s, inactive=%ums)",
+                 sat_state_name(sat_state_get()), (unsigned)inactive_ms);
+    }
 }
 
 static void wifi_check_timer_handler(lv_timer_t *timer)

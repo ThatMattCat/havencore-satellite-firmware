@@ -41,6 +41,16 @@ Recent landings:
   (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`); `boot_health_task`
   marks the image valid after the first 200 probe. Full detail in
   [`OTA.md`](OTA.md).
+- **2026-04-29** — Idle backlight off + Wi-Fi `WIFI_PS_MIN_MODEM`.
+  `screen_idle_timer_handler` in `app_ui_ctrl.c` polls every 500 ms
+  and calls `bsp_display_backlight_off()` once the FSM has been IDLE
+  *and* LVGL `lv_disp_get_inactive_time()` has exceeded 60 s; touch or
+  any state change away from IDLE wakes via `bsp_display_backlight_on()`.
+  Voice wake (wake-word) re-lights the screen as a side-effect of the
+  IDLE→LISTENING transition. `esp_wifi_set_ps(WIFI_PS_MIN_MODEM)` after
+  `esp_wifi_start()` lets the radio sleep between beacons. Together
+  expected to push 18650 idle runtime from ~12–20 h to ~25–35 h with
+  no UX impact.
 
 What's working:
 
@@ -172,6 +182,38 @@ pipeline is rock-solid.
 The trusted-LAN assumption is explicit. TLS would add an mbedtls
 bundle (~80 KB) and a cert/key flow. Punt until we put a satellite
 outside the LAN.
+
+### Deeper power savings (PM_ENABLE, wake-word cadence, panel sleep)
+
+Backlight-off + Wi-Fi PS landed 2026-04-29. The remaining knobs need
+either a power-measurement rig or a careful interaction pass with the
+always-on audio path:
+
+- `CONFIG_PM_ENABLE` + auto-light-sleep / dynamic frequency scaling.
+  ~40–60 mA potential, but the I²S capture + microWakeWord 20 ms
+  cadence makes light-sleep a non-trivial integration. Wants a
+  dedicated investigation.
+- Wake-word poll cadence (20 → 40 ms). ~10–20 mA at the cost of
+  voice-detection latency. Defer until we can A/B-test runtime *and*
+  detection rate on a battery-powered device.
+- Full panel sleep (`bsp_display_enter_sleep`) instead of just
+  backlight off. Saves a few extra mA but breaks tap-to-wake unless
+  we add GPIO-wake or a polling timer. Not worth it today.
+
+### Battery percentage indicator
+
+Stock BOX-3 BSP exposes no battery telemetry — no `bsp_battery_*`,
+no built-in voltage divider, no fuel-gauge driver. Picking this back
+up will require knowing the specific 18650 dock's hardware (fuel-gauge
+IC on I²C, or a VBAT line into a free ADC pin) so we can write the
+right driver and surface a label in the top-right of `ui_ScreenListen`.
+
+### Promote screen-off timeout to a Settings slider
+
+Currently hardcoded 60 s via `SCREEN_OFF_AFTER_MS` in `app_ui_ctrl.c`.
+Promoting it follows the existing Listen Cap / Silence / Follow-Up
+recipe (`docs/SETTINGS.md` covers NVS + UI row + HTTP plumbing). Worth
+a separate PR once we've lived with the default for a bit.
 
 ### Per-device microWakeWord tunables
 
