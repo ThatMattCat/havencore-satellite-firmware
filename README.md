@@ -68,10 +68,13 @@ with minor tweaks, but only the **BOX-3** is regularly tested.
 ├── squareline/                     # SquareLine Studio project (regenerates ui/)
 ├── patches/                        # idempotent patches for managed_components/
 └── docs/
-    ├── ARCHITECTURE.md             #   how the firmware is wired
+    ├── README.md                   #   index of the docs below
+    ├── ARCHITECTURE.md             #   hardware, components, boot, FSM, HTTP, UI
+    ├── AUDIO.md                    #   wake-word, VAD, listen / follow-up windows
+    ├── OTA.md                      #   OTA push/pull, partition layout, gotchas
     ├── PROVISIONING.md             #   UF2 mass-storage flow + esptool appendix
     ├── SETTINGS.md                 #   NVS schema + recipe for new settings
-    └── ROADMAP.md                  #   planned improvements, deferred work
+    └── ROADMAP.md                  #   status, known issues, deferred work
 ```
 
 ## Build

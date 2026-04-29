@@ -2,14 +2,16 @@
 
 ESP-IDF v5.5 firmware for an ESP32-S3-BOX-3 voice satellite that talks to a self-hosted HavenCore agent on the LAN. MVP is touch-to-talk: tap → STT → chat → TTS → playback.
 
-Most of the detail lives in `docs/` — start there:
+Most of the detail lives in `docs/` — [`docs/README.md`](docs/README.md) is the index. Topic docs:
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — boot flow, turn-level FSM, audio pipeline, HTTP client, OTA, debug overlay, flash layout.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — current status, deferred work, known issues, OTA gotchas worth re-reading before another partition pass.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — hardware, component graph, boot, turn-level FSM, HTTP contracts, UI.
+- [`docs/AUDIO.md`](docs/AUDIO.md) — wake-word, simple_vad, listen-window endpointing, follow-up window (incl. onset-tuning post-mortem).
+- [`docs/OTA.md`](docs/OTA.md) — OTA push/pull, sidecar version-skip, auto-publish, partition layout, gotchas worth re-reading before another partition pass.
 - [`docs/PROVISIONING.md`](docs/PROVISIONING.md) — UF2 mass-storage flow + esptool/CSV recovery appendix.
 - [`docs/SETTINGS.md`](docs/SETTINGS.md) — NVS schema and the recipe for adding a new user-editable setting (storage + UI row + HTTP plumbing).
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — current status, known issues, deferred work, MVP checklist.
 
-When changing direction, update ROADMAP first.
+When changing direction, update ROADMAP first. Before adding or restructuring any doc, skim [`docs/README.md`](docs/README.md) § Writing guidelines — it covers structure, where new content goes, and the convention for retiring deferred items.
 
 ## Build & flash
 
@@ -29,7 +31,7 @@ make version IP=10.0.0.42    # GET /dev/version on the device
 make publish                 # rsync bin + sidecar to the HavenCore web server
 ```
 
-`idf.py build` auto-runs `scripts/publish_firmware.sh` as a CMake post-build step — configure via `.publish.env` (gitignored; see `.publish.env.example`). Unconfigured → silent no-op. See `docs/ARCHITECTURE.md` § OTA for the version-skip / sidecar flow and why rsync (not scp).
+`idf.py build` auto-runs `scripts/publish_firmware.sh` as a CMake post-build step — configure via `.publish.env` (gitignored; see `.publish.env.example`). Unconfigured → silent no-op. See [`docs/OTA.md`](docs/OTA.md) for the version-skip / sidecar flow and why rsync (not scp).
 
 The BOX-3 device is attached from a remote Windows host (10.0.0.88) via usbipd/usbip — see `~/remote-usb.txt` for the attach sequence before `/dev/ttyACM0` appears.
 

@@ -9,6 +9,8 @@ Related docs:
   via UF2 mass-storage (primary) or esptool (appendix).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — where settings sit in the boot
   sequence and component graph.
+- [`OTA.md`](OTA.md) — what the Update Firmware button (one of the
+  Settings rows) actually does.
 
 ## Storage
 

@@ -7,6 +7,13 @@ you edit `CONFIG.INI`, and normal boot resumes with real values. The
 esptool/CSV path from earlier is still here as an appendix for dev
 work and recovery.
 
+Related docs:
+
+- [`OTA.md`](OTA.md) — partition layout that the migration step below
+  targets, and the boot flow when otadata is empty.
+- [`SETTINGS.md`](SETTINGS.md) — full schema for keys you can set in
+  `CONFIG.INI` (and which ones are also editable in-app).
+
 ## Migrating an existing device to the OTA partition layout
 
 The 2026-04-29 OTA work changed the partition table: `factory` 1.5 MB
